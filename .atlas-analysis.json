@@ -1,0 +1,175 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Tempo",
+  "projectDescription": "A high-performance blockchain optimized for stablecoin payments at scale",
+  "theme": "aspen",
+  "primaryColor": "#040404",
+  "lightColor": "#7c7c7c",
+  "darkColor": "#c8c8c8",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/tempo-transactions",
+              "concepts/tip20-tokens",
+              "concepts/consensus",
+              "concepts/evm-compatibility"
+            ]
+          },
+          {
+            "group": "Running a Node",
+            "pages": [
+              "node/installation",
+              "node/configuration",
+              "node/running",
+              "node/maintenance"
+            ]
+          },
+          {
+            "group": "Building on Tempo",
+            "pages": [
+              "guides/deploying-contracts",
+              "guides/making-payments",
+              "guides/batch-payments",
+              "guides/fee-sponsorship",
+              "guides/smart-accounts"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "sdk/overview",
+              "sdk/typescript",
+              "sdk/rust",
+              "sdk/go",
+              "sdk/foundry"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Protocol Reference",
+        "groups": [
+          {
+            "group": "Transaction Types",
+            "pages": [
+              "protocol/transactions/overview",
+              "protocol/transactions/tempo-transaction",
+              "protocol/transactions/evm-transactions"
+            ]
+          },
+          {
+            "group": "TIP-20 Token Standard",
+            "pages": [
+              "protocol/tip20/overview",
+              "protocol/tip20/transfers",
+              "protocol/tip20/memos",
+              "protocol/tip20/compliance"
+            ]
+          },
+          {
+            "group": "Fee System",
+            "pages": [
+              "protocol/fees/overview",
+              "protocol/fees/gas-pricing",
+              "protocol/fees/fee-amm",
+              "protocol/fees/stablecoin-fees"
+            ]
+          },
+          {
+            "group": "Precompiles",
+            "pages": [
+              "protocol/precompiles/overview",
+              "protocol/precompiles/nonce",
+              "protocol/precompiles/account-keychain",
+              "protocol/precompiles/tip20-factory",
+              "protocol/precompiles/tip403-registry",
+              "protocol/precompiles/validator-config"
+            ]
+          },
+          {
+            "group": "TIPs (Tempo Improvement Proposals)",
+            "pages": [
+              "protocol/tips/overview",
+              "protocol/tips/tip-1000",
+              "protocol/tips/tip-1001",
+              "protocol/tips/tip-1002",
+              "protocol/tips/tip-1003",
+              "protocol/tips/tip-1004",
+              "protocol/tips/tip-1005",
+              "protocol/tips/tip-1006",
+              "protocol/tips/tip-1007",
+              "protocol/tips/tip-1009",
+              "protocol/tips/tip-1010",
+              "protocol/tips/tip-1011",
+              "protocol/tips/tip-1015",
+              "protocol/tips/tip-1016",
+              "protocol/tips/tip-1017"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "JSON-RPC Methods",
+            "pages": [
+              "api/overview",
+              "api/standard-methods",
+              "api/tempo-methods",
+              "api/admin-methods"
+            ]
+          },
+          {
+            "group": "Rust Crates",
+            "pages": [
+              "api/rust/tempo-node",
+              "api/rust/tempo-alloy",
+              "api/rust/tempo-primitives",
+              "api/rust/tempo-evm",
+              "api/rust/tempo-consensus"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "TIP-20 token standard with native compliance and memos",
+    "Tempo Transactions with batching and fee sponsorship",
+    "Sub-millidollar transaction fees paid in stablecoins",
+    "Fast finality with Simplex Consensus via Commonware",
+    "Full EVM compatibility built on Reth SDK",
+    "Smart accounts with passkey support",
+    "Dedicated payment lanes for predictable throughput",
+    "Fee AMM for automatic stablecoin conversion"
+  ],
+  "publicApiSurface": [
+    "tempo node - Main blockchain node binary",
+    "tempo-bench - Benchmarking tool",
+    "tempo-sidecar - Sidecar service",
+    "tempo-alloy - Rust SDK for Tempo",
+    "tempo_fundAddress - RPC method to fund testnet addresses",
+    "tempo_getSubblockTransactions - RPC method for subblock data",
+    "TIP-20 precompiles - Enshrined token operations",
+    "Nonce precompile - 2D nonce management",
+    "AccountKeychain precompile - Key management",
+    "TIP403Registry precompile - Policy registry",
+    "ValidatorConfig precompile - Validator management",
+    "FeeAMM precompile - Fee token conversion",
+    "StablecoinDEX precompile - On-chain liquidity"
+  ]
+}
