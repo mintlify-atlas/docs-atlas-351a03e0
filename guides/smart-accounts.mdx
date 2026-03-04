@@ -1,0 +1,570 @@
+---
+title: 'Smart Accounts'
+description: 'Enable passkey authentication, WebAuthn, and P256 signatures for seamless user experiences'
+icon: 'key'
+---
+
+Tempo Transactions provide native "smart account" functionality through the Account Keychain precompile, enabling modern authentication methods like passkeys, WebAuthn, and P256 signatures without requiring complex account abstraction infrastructure.
+
+## Why Smart Accounts?
+
+Smart accounts on Tempo unlock:
+
+- **Passkey authentication**: Sign transactions with Face ID, Touch ID, or biometric devices
+- **WebAuthn support**: Integrate with hardware security keys (YubiKey, etc.)
+- **P256 signatures**: Use Secure Enclave and modern cryptographic standards
+- **Access key delegation**: Root keys authorize scoped secondary keys with limits
+- **Key rotation**: Update credentials without changing account addresses
+- **Multi-device sync**: Passkeys sync across devices via cloud keychain
+
+## Authentication Types
+
+Tempo supports three signature types:
+
+| Type | Use Case | Description |
+|------|----------|-------------|
+| **Secp256k1** | Traditional wallets | Standard Ethereum signatures |
+| **P256** | Mobile devices | Secure Enclave, passkeys, biometric auth |
+| **WebAuthn** | Hardware keys | YubiKey, Titan keys, platform authenticators |
+
+## Account Keychain Precompile
+
+The Account Keychain is deployed at `0xaAAAaaAA00000000000000000000000000000000` and manages:
+
+- **Root keys**: Primary account controllers (address-derived)
+- **Access keys**: Delegated keys with expiry and spending limits
+- **Signature verification**: Protocol-level validation of P256/WebAuthn
+- **Spending limits**: Per-token caps for delegated keys
+
+## Basic Access Key Authorization
+
+Authorize a secondary key with an expiry and optional spending limits:
+
+<CodeGroup>
+```rust Rust
+use alloy::{
+    primitives::{Address, U256, address},
+    providers::ProviderBuilder,
+};
+use tempo_alloy::{
+    TempoNetwork,
+    contracts::precompiles::IAccountKeychain,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    let keychain = IAccountKeychain::new(
+        address!("0xaAAAaaAA00000000000000000000000000000000"),
+        &provider,
+    );
+
+    // Generate or derive an access key ID
+    let access_key_id = address!("0x1234567890abcdef1234567890abcdef12345678");
+
+    // Set expiry (30 days from now)
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() + (30 * 24 * 60 * 60);
+
+    // Define spending limits for specific tokens
+    let token_limits = vec![
+        IAccountKeychain::TokenLimit {
+            token: address!("0x20c0000000000000000000000000000000000001"), // AlphaUSD
+            amount: U256::from(1_000_000_000), // 1,000 tokens
+        },
+    ];
+
+    // Authorize the key (must be called by root key)
+    let receipt = keychain
+        .authorizeKey(
+            access_key_id,
+            IAccountKeychain::SignatureType::P256, // Use P256 for mobile
+            expiry,
+            true, // Enforce spending limits
+            token_limits,
+        )
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    println!("Access key authorized: {:?}", receipt.transaction_hash);
+
+    Ok(())
+}
+```
+
+```typescript TypeScript
+import { createWalletClient, http, parseUnits } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const KEYCHAIN_ABI = [{
+  name: 'authorizeKey',
+  type: 'function',
+  inputs: [
+    { name: 'keyId', type: 'address' },
+    { name: 'signatureType', type: 'uint8' }, // 0: Secp256k1, 1: P256, 2: WebAuthn
+    { name: 'expiry', type: 'uint64' },
+    { name: 'enforceLimits', type: 'bool' },
+    { name: 'limits', type: 'tuple[]', components: [
+      { name: 'token', type: 'address' },
+      { name: 'amount', type: 'uint256' }
+    ]}
+  ]
+}];
+
+const rootAccount = privateKeyToAccount(process.env.PRIVATE_KEY);
+const client = createWalletClient({
+  account: rootAccount,
+  chain: {
+    id: 42431,
+    name: 'Tempo Testnet',
+    rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } }
+  },
+  transport: http()
+});
+
+const accessKeyId = '0x1234567890abcdef1234567890abcdef12345678';
+const expiry = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60); // 30 days
+
+const hash = await client.writeContract({
+  address: '0xaAAAaaAA00000000000000000000000000000000',
+  abi: KEYCHAIN_ABI,
+  functionName: 'authorizeKey',
+  args: [
+    accessKeyId,
+    1, // P256
+    expiry,
+    true, // Enforce limits
+    [{
+      token: '0x20c0000000000000000000000000000000000001',
+      amount: parseUnits('1000', 6) // 1,000 tokens (6 decimals)
+    }]
+  ]
+});
+
+console.log('Access key authorized:', hash);
+```
+
+```solidity Solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+interface IAccountKeychain {
+    enum SignatureType { Secp256k1, P256, WebAuthn }
+
+    struct TokenLimit {
+        address token;
+        uint256 amount;
+    }
+
+    function authorizeKey(
+        address keyId,
+        SignatureType signatureType,
+        uint64 expiry,
+        bool enforceLimits,
+        TokenLimit[] calldata limits
+    ) external;
+}
+
+contract MyContract {
+    IAccountKeychain constant KEYCHAIN = IAccountKeychain(
+        0xaAAAaaAA00000000000000000000000000000000
+    );
+
+    function createAccessKey(address keyId) external {
+        IAccountKeychain.TokenLimit[] memory limits = new IAccountKeychain.TokenLimit[](1);
+        limits[0] = IAccountKeychain.TokenLimit({
+            token: 0x20c0000000000000000000000000000000000001,
+            amount: 1_000_000_000
+        });
+
+        KEYCHAIN.authorizeKey(
+            keyId,
+            IAccountKeychain.SignatureType.P256,
+            uint64(block.timestamp + 30 days),
+            true,
+            limits
+        );
+    }
+}
+```
+</CodeGroup>
+
+<Info>
+Only the root key (address(0) as transaction key) can authorize or revoke access keys.
+</Info>
+
+## Using Passkeys (P256)
+
+Integrate passkey authentication for mobile-native experiences:
+
+```typescript
+import { P256Credential } from '@github/webauthn-json';
+import { create } from '@github/webauthn-json';
+
+// Create a passkey for the user
+async function createPasskey(userName: string) {
+  const credential = await create({
+    publicKey: {
+      challenge: new Uint8Array(32), // Random challenge
+      rp: {
+        name: 'My Tempo App',
+        id: 'app.example.com'
+      },
+      user: {
+        id: new Uint8Array(16), // User ID
+        name: userName,
+        displayName: userName
+      },
+      pubKeyCredParams: [
+        { alg: -7, type: 'public-key' } // ES256 (P256)
+      ],
+      authenticatorSelection: {
+        authenticatorAttachment: 'platform', // Use device biometrics
+        userVerification: 'required'
+      }
+    }
+  });
+
+  // Extract the P256 public key
+  const publicKey = extractPublicKey(credential);
+  
+  // Derive key ID from public key
+  const keyId = deriveKeyId(publicKey);
+
+  // Authorize this key on Tempo
+  await authorizeP256Key(keyId);
+
+  return { credential, keyId };
+}
+
+// Sign a transaction with the passkey
+async function signWithPasskey(transaction: Transaction, credentialId: string) {
+  const txHash = hashTransaction(transaction);
+  
+  const assertion = await get({
+    publicKey: {
+      challenge: txHash,
+      allowCredentials: [{
+        id: credentialId,
+        type: 'public-key'
+      }],
+      userVerification: 'required'
+    }
+  });
+
+  // Extract P256 signature
+  const signature = extractP256Signature(assertion);
+  
+  return signature;
+}
+```
+
+## WebAuthn Authentication
+
+Use hardware security keys for maximum security:
+
+```rust
+use alloy::primitives::B256;
+
+// WebAuthn signature structure
+struct WebAuthnSignature {
+    authenticator_data: Vec<u8>,
+    client_data_json: Vec<u8>,
+    challenge_index: u32,
+    type_index: u32,
+    r: B256,
+    s: B256,
+}
+
+// Authorize a WebAuthn key
+let receipt = keychain
+    .authorizeKey(
+        webauthn_key_id,
+        IAccountKeychain::SignatureType::WebAuthn,
+        expiry,
+        false, // No spending limits for admin key
+        vec![],
+    )
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+## Access Key Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Mobile App Keys" icon="mobile">
+    Device-specific keys with passkey biometric auth
+  </Card>
+  <Card title="Session Keys" icon="clock">
+    Short-lived keys for temporary access
+  </Card>
+  <Card title="Spending Limits" icon="credit-card">
+    Delegate payment authority with caps
+  </Card>
+  <Card title="Employee Access" icon="users">
+    Corporate accounts with scoped permissions
+  </Card>
+  <Card title="Gaming Keys" icon="gamepad">
+    In-game transaction keys with limits
+  </Card>
+  <Card title="API Keys" icon="code">
+    Programmatic access with restrictions
+  </Card>
+</CardGroup>
+
+## Revoking Access Keys
+
+Revoke a compromised or expired key:
+
+```rust
+let receipt = keychain
+    .revokeKey(access_key_id)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+
+println!("Key revoked: {:?}", receipt.transaction_hash);
+```
+
+<Warning>
+Revoked keys cannot be re-authorized. This prevents replay attacks.
+</Warning>
+
+## Updating Spending Limits
+
+Adjust limits for an existing access key:
+
+```rust
+let token_address = address!("0x20c0000000000000000000000000000000000001");
+let new_limit = U256::from(2_000_000_000); // Increase to 2,000 tokens
+
+let receipt = keychain
+    .updateSpendingLimit(access_key_id, token_address, new_limit)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+## Querying Key Information
+
+Check the status and limits of an access key:
+
+```rust
+// Get key info
+let key_info = keychain.getKey(account_address, access_key_id).call().await?;
+
+println!("Signature type: {:?}", key_info.signatureType);
+println!("Expiry: {}", key_info.expiry);
+println!("Enforce limits: {}", key_info.enforceLimits);
+println!("Is revoked: {}", key_info.isRevoked);
+
+// Check remaining spending limit
+let remaining = keychain
+    .getRemainingLimit(account_address, access_key_id, token_address)
+    .call()
+    .await?;
+
+println!("Remaining limit: {} tokens", remaining);
+```
+
+## Multi-Device Sync
+
+Passkeys automatically sync across devices via cloud keychain:
+
+```typescript
+// User creates passkey on iPhone
+const credential = await createPasskey('user@example.com');
+
+// Passkey syncs to iPad, Mac via iCloud Keychain
+// User can sign transactions from any device
+
+// Sign on different device
+const signature = await signWithPasskey(transaction, credential.id);
+```
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use expiry timestamps">
+    Always set reasonable expiry times for access keys. Short-lived keys reduce exposure.
+  </Accordion>
+  <Accordion title="Enforce spending limits">
+    Enable limits for non-admin keys to cap potential damage from compromise.
+  </Accordion>
+  <Accordion title="Monitor key usage">
+    Track which keys sign which transactions. Alert on suspicious patterns.
+  </Accordion>
+  <Accordion title="Revoke on compromise">
+    Immediately revoke keys if a device is lost or compromised.
+  </Accordion>
+  <Accordion title="Use P256 for mobile">
+    Leverage Secure Enclave on iOS/Android for hardware-backed keys.
+  </Accordion>
+</AccordionGroup>
+
+## Key Rotation Pattern
+
+Rotate keys periodically for security:
+
+```rust
+// 1. Authorize new key
+let new_key_id = generate_new_key();
+keychain
+    .authorizeKey(
+        new_key_id,
+        SignatureType::P256,
+        expiry,
+        true,
+        limits.clone(),
+    )
+    .send()
+    .await?;
+
+// 2. Test new key
+let test_tx = create_test_transaction();
+let signature = sign_with_key(test_tx, new_key_id).await?;
+assert!(verify_signature(signature));
+
+// 3. Revoke old key
+keychain.revokeKey(old_key_id).send().await?;
+
+// 4. Update application to use new key
+update_stored_key_id(new_key_id);
+```
+
+## Integration Examples
+
+### Mobile Wallet with Passkeys
+
+```typescript
+class TempoWallet {
+  private keyId: string;
+  private credentialId: string;
+
+  async initialize(userName: string) {
+    // Create passkey
+    const { credential, keyId } = await createPasskey(userName);
+    this.keyId = keyId;
+    this.credentialId = credential.id;
+
+    // Authorize on Tempo
+    await this.authorizeKey();
+  }
+
+  async sendPayment(to: string, amount: bigint) {
+    // Build transaction
+    const tx = buildTransaction({ to, amount });
+
+    // Sign with passkey (Face ID / Touch ID)
+    const signature = await signWithPasskey(tx, this.credentialId);
+
+    // Send signed transaction
+    return await sendTransaction(tx, signature);
+  }
+
+  private async authorizeKey() {
+    const expiry = Date.now() / 1000 + (365 * 24 * 60 * 60); // 1 year
+    const limits = [{ 
+      token: ALPHA_USD_ADDRESS, 
+      amount: parseUnits('10000', 6) 
+    }];
+
+    return await keychain.authorizeKey(
+      this.keyId,
+      SignatureType.P256,
+      expiry,
+      true,
+      limits
+    );
+  }
+}
+```
+
+### Enterprise Multi-User Access
+
+```rust
+struct EnterpriseAccount {
+    root_key: PrivateKeySigner,
+    employee_keys: HashMap<String, AccessKeyConfig>,
+}
+
+struct AccessKeyConfig {
+    key_id: Address,
+    role: Role,
+    limits: Vec<TokenLimit>,
+    expiry: u64,
+}
+
+enum Role {
+    Admin,
+    Approver { daily_limit: U256 },
+    Operator { per_tx_limit: U256 },
+}
+
+impl EnterpriseAccount {
+    async fn add_employee(
+        &mut self,
+        name: String,
+        role: Role,
+    ) -> Result<Address> {
+        let (key_id, limits, expiry) = match role {
+            Role::Admin => (
+                generate_key(),
+                vec![], // No limits
+                u64::MAX, // Never expires
+            ),
+            Role::Approver { daily_limit } => (
+                generate_key(),
+                vec![TokenLimit { token: ALPHA_USD, amount: daily_limit }],
+                now() + 90_DAYS,
+            ),
+            Role::Operator { per_tx_limit } => (
+                generate_key(),
+                vec![TokenLimit { token: ALPHA_USD, amount: per_tx_limit }],
+                now() + 30_DAYS,
+            ),
+        };
+
+        self.keychain
+            .authorizeKey(key_id, SignatureType::P256, expiry, true, limits)
+            .send()
+            .await?;
+
+        self.employee_keys.insert(name, AccessKeyConfig {
+            key_id,
+            role,
+            limits: limits.clone(),
+            expiry,
+        });
+
+        Ok(key_id)
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fee Sponsorship" icon="hand-holding-dollar" href="/guides/fee-sponsorship">
+    Combine smart accounts with fee sponsorship
+  </Card>
+  <Card title="Batch Payments" icon="layer-group" href="/guides/batch-payments">
+    Use access keys to authorize batch operations
+  </Card>
+  <Card title="Tempo Transaction" icon="book" href="/concepts/tempo-transactions">
+    Learn about Tempo Transaction features
+  </Card>
+  <Card title="Account Keychain" icon="link" href="/protocol/precompiles/account-keychain">
+    Detailed protocol specification
+  </Card>
+</CardGroup>

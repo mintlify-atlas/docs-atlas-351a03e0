@@ -1,0 +1,325 @@
+---
+title: Nonce Manager Precompile
+description: 2D nonce management for parallel transaction execution and replay protection
+---
+
+The Nonce Manager precompile provides advanced nonce management beyond Ethereum's simple sequential nonces. It enables parallel transaction execution through 2D nonces and supports expiring nonces for time-bound operations.
+
+## Address
+
+```
+0x4E4F4E4345000000000000000000000000000000
+```
+
+The address spells "NONCE" in ASCII hex (`0x4E 0x4F 0x4E 0x43 0x45`).
+
+## Overview
+
+Tempo extends Ethereum's nonce system with two key features:
+
+1. **2D Nonces**: Each account has multiple independent nonce sequences (keys 1-N)
+2. **Expiring Nonces**: Hash-based replay protection for time-bound transactions
+
+### Protocol vs User Nonces
+
+- **Protocol Nonce (key 0)**: Stored in account state, managed by the protocol
+- **User Nonces (key 1-N)**: Stored in the precompile, managed by users
+
+The precompile only manages user nonces. Protocol nonce is incremented automatically by the protocol for standard transactions.
+
+## Interface
+
+```solidity
+interface INonce {
+    /// @notice Get the current nonce for a specific account and nonce key
+    /// @param account The account address
+    /// @param nonceKey The nonce key (must be > 0)
+    /// @return nonce The current nonce value
+    function getNonce(address account, uint256 nonceKey) 
+        external view returns (uint64 nonce);
+}
+```
+
+### Events
+
+```solidity
+event NonceIncremented(
+    address indexed account,
+    uint256 indexed nonceKey,
+    uint64 newNonce
+);
+```
+
+### Errors
+
+```solidity
+error ProtocolNonceNotSupported();
+error InvalidNonceKey();
+error NonceOverflow();
+error InvalidExpiringNonceExpiry();
+error ExpiringNonceReplay();
+error ExpiringNonceSetFull();
+```
+
+## 2D Nonces
+
+2D nonces allow parallel transaction submission by using different nonce keys:
+
+```javascript
+// Submit transactions in parallel using different nonce keys
+await Promise.all([
+  sendTx({ from: alice, nonce: [1, 0] }), // key 1, nonce 0
+  sendTx({ from: alice, nonce: [2, 0] }), // key 2, nonce 0
+  sendTx({ from: alice, nonce: [3, 0] })  // key 3, nonce 0
+])
+```
+
+### Benefits
+
+- **No Waiting**: Submit multiple transactions without waiting for confirmations
+- **Batching**: Group related operations on separate nonce keys
+- **Account Abstraction**: Different keys for different authorization levels
+
+### How It Works
+
+```
+Account State:
+  protocol_nonce: u64  // key 0, in account state
+
+Precompile Storage:
+  nonces[account][1]: 0  // user nonce key 1
+  nonces[account][2]: 0  // user nonce key 2
+  nonces[account][3]: 0  // user nonce key 3
+  ...
+```
+
+Each nonce key maintains an independent sequence. Transactions on key 1 don't block transactions on key 2.
+
+## Expiring Nonces
+
+Expiring nonces provide replay protection for time-bound transactions without consuming a nonce slot:
+
+```javascript
+// Transaction valid for 30 seconds
+const tx = {
+  from: alice,
+  nonce: null,  // No sequential nonce
+  expiringNonce: true,
+  validBefore: Date.now() + 30000
+}
+```
+
+### Properties
+
+- **Time-Bound**: Transactions automatically expire after `validBefore`
+- **Hash-Based**: Replay protection via transaction hash
+- **No Gaps**: Doesn't create gaps in sequential nonces
+- **High-Throughput**: Circular buffer supports 300,000 concurrent expiring transactions
+
+### Validation Rules
+
+1. `validBefore` must be in range `(now, now + 30 seconds]`
+2. Transaction hash must not be already seen and unexpired
+3. Circular buffer must have space (old entries must be expired)
+
+### Circular Buffer
+
+Expiring nonces use a 300k-entry circular buffer:
+
+```rust
+const CAPACITY: u32 = 300_000;  // Supports 10k TPS for 30 seconds
+const MAX_EXPIRY_SECS: u64 = 30;
+
+// Storage layout
+expiring_nonce_seen: Mapping<B256, u64>     // hash => expiry timestamp
+expiring_nonce_ring: Mapping<u32, B256>     // index => hash
+expiring_nonce_ring_ptr: u32                // current position
+```
+
+As the pointer advances, expired entries are evicted and their slots reused.
+
+## Usage Examples
+
+### Reading Current Nonce
+
+```solidity
+contract NoncExample {
+    INonce constant NONCE_MANAGER = 
+        INonce(0x4E4F4E4345000000000000000000000000000000);
+    
+    function getUserNonce(address user, uint256 key) 
+        public view returns (uint64) 
+    {
+        return NONCE_MANAGER.getNonce(user, key);
+    }
+}
+```
+
+### Parallel Transaction Submission
+
+```typescript
+import { createWalletClient, http } from 'viem'
+
+const client = createWalletClient({
+  chain: tempo,
+  transport: http()
+})
+
+// Get current nonces for keys 1-3
+const nonces = await Promise.all([
+  getNonce(alice, 1),
+  getNonce(alice, 2),
+  getNonce(alice, 3)
+])
+
+// Submit transactions in parallel
+await Promise.all([
+  sendTransaction({ nonce: [1, nonces[0]] }),
+  sendTransaction({ nonce: [2, nonces[1]] }),
+  sendTransaction({ nonce: [3, nonces[2]] })
+])
+```
+
+### Batched Operations
+
+```typescript
+// Dedicate nonce keys to different operation types
+const NONCE_KEYS = {
+  trading: 1,
+  transfers: 2,
+  governance: 3
+}
+
+// Trading transactions on key 1
+await trade({ nonce: [NONCE_KEYS.trading, 0] })
+await trade({ nonce: [NONCE_KEYS.trading, 1] })
+
+// Meanwhile, transfers on key 2 (doesn't block trading)
+await transfer({ nonce: [NONCE_KEYS.transfers, 0] })
+```
+
+## Gas Costs
+
+| Operation | Cold | Warm |
+|-----------|------|------|
+| `getNonce` | ~2,300 gas | ~300 gas |
+| Nonce increment (internal) | ~22,100 gas | ~5,100 gas |
+| Expiring nonce check | ~4,500 gas | ~1,500 gas |
+
+<Note>
+  Cold access occurs on first read/write. Subsequent accesses in the same transaction are warm.
+</Note>
+
+## Storage Layout
+
+```solidity
+// Slot 0: 2D nonces
+mapping(address => mapping(uint256 => uint64)) public nonces;
+
+// Slot 1: Expiring nonce seen set (hash => expiry)
+mapping(bytes32 => uint64) public expiringNonceSeen;
+
+// Slot 2: Expiring nonce circular buffer (index => hash)
+mapping(uint32 => bytes32) public expiringNonceRing;
+
+// Slot 3: Circular buffer pointer
+uint32 public expiringNonceRingPtr;
+```
+
+Slots are computed using standard Solidity keccak256 layout.
+
+## Protocol Integration
+
+### Transaction Validation
+
+The protocol checks nonces during transaction validation:
+
+1. If using protocol nonce (key 0): Check account state
+2. If using user nonce (key > 0): Call precompile `getNonce`
+3. Transaction nonce must equal current nonce
+4. On success, increment the nonce
+
+### Nonce Increment
+
+User nonces are incremented by calling the internal `increment_nonce` function (not exposed in ABI). This is called by the protocol during transaction execution.
+
+```rust
+pub fn increment_nonce(&mut self, account: Address, nonce_key: U256) 
+    -> Result<u64>
+```
+
+## Account Abstraction
+
+The Account Keychain precompile uses 2D nonces to enable spending limits per access key:
+
+```javascript
+// Main key uses protocol nonce (key 0)
+await authorizeKey(accessKey, {
+  limits: { USDC: 1000 },
+  nonceKey: 1  // Access key uses user nonce key 1
+})
+
+// Access key transactions on key 1, main key on key 0
+await transfer(accessKey, { nonce: [1, 0] })  // Uses key 1
+await revokeKey(mainKey, { nonce: [0, 42] })  // Uses key 0
+```
+
+This allows access keys to operate independently without blocking main key operations.
+
+## Best Practices
+
+### Nonce Key Allocation
+
+- **Key 0**: Reserved for protocol (account state)
+- **Keys 1-10**: Interactive operations (user-facing transactions)
+- **Keys 11-100**: Automation (bots, keepers)
+- **Keys 101+**: Reserved for future use
+
+### Error Handling
+
+```typescript
+try {
+  await sendTransaction({ nonce: [1, currentNonce] })
+} catch (err) {
+  if (err.message.includes('nonce too low')) {
+    // Nonce was already used, fetch latest
+    const latest = await getNonce(account, 1)
+    await sendTransaction({ nonce: [1, latest] })
+  }
+}
+```
+
+### Parallel Submission
+
+```typescript
+// ✅ Good: Different nonce keys
+await Promise.all([
+  tx({ nonce: [1, 0] }),
+  tx({ nonce: [2, 0] })
+])
+
+// ❌ Bad: Same nonce key (race condition)
+await Promise.all([
+  tx({ nonce: [1, 0] }),
+  tx({ nonce: [1, 1] })  // Might execute before first tx confirms
+])
+```
+
+## Limitations
+
+- **Nonce keys 1-2^256**: User nonces support any uint256 key
+- **Nonce values 0-2^64**: Each nonce sequence maxes at 18.4 quintillion
+- **Expiring nonces**: Max 300k concurrent, 30-second expiry window
+- **Protocol nonce**: Cannot be read via precompile (use account state)
+
+## Security Considerations
+
+- **No Replay Protection**: Expiring nonces rely on time, ensure clocks are synchronized
+- **Nonce Gaps**: Unused nonces create gaps; track which keys are in use
+- **Overflow**: Nonce overflow reverts transaction (unlikely with u64)
+
+## See Also
+
+- [Account Abstraction](/concepts/tempo-transactions)
+- [Account Keychain Precompile](/protocol/precompiles/account-keychain)
+- [Transaction Format](/protocol/transactions/overview)

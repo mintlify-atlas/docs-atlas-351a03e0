@@ -1,0 +1,407 @@
+---
+title: 'Batch Payments'
+description: 'Execute multiple payments atomically in a single Tempo Transaction'
+icon: 'layer-group'
+---
+
+Tempo Transactions enable atomic batch operations, allowing you to execute multiple token transfers, contract calls, or operations in a single transaction. This is ideal for payroll, settlement batches, multi-recipient disbursements, and complex payment flows.
+
+## Why Batch Payments?
+
+Batch payments on Tempo provide:
+
+- **Atomic execution**: All operations succeed or fail together
+- **Gas efficiency**: One transaction fee for multiple payments
+- **Simplified reconciliation**: Single transaction hash for the entire batch
+- **Guaranteed ordering**: Operations execute in the specified sequence
+
+## Basic Batch Transfer
+
+Send multiple TIP-20 payments in a single transaction:
+
+<CodeGroup>
+```rust Rust
+use alloy::{
+    primitives::{Address, U256, address},
+    providers::{Provider, ProviderBuilder},
+    sol_types::SolCall,
+};
+use tempo_alloy::{
+    TempoNetwork,
+    contracts::precompiles::ITIP20,
+    primitives::transaction::Call,
+    rpc::TempoTransactionRequest,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL").expect("No RPC URL set"))
+        .await?;
+
+    let recipient1 = address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb");
+    let recipient2 = address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+    let recipient3 = address!("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC");
+    let token_address: Address = address!("0x20c0000000000000000000000000000000000001");
+
+    // Build the batch of calls
+    let calls = vec![
+        Call {
+            to: token_address.into(),
+            input: ITIP20::transferCall {
+                to: recipient1,
+                amount: U256::from(100_000_000), // 100 tokens
+            }
+            .abi_encode()
+            .into(),
+            value: U256::ZERO,
+        },
+        Call {
+            to: token_address.into(),
+            input: ITIP20::transferCall {
+                to: recipient2,
+                amount: U256::from(50_000_000), // 50 tokens
+            }
+            .abi_encode()
+            .into(),
+            value: U256::ZERO,
+        },
+        Call {
+            to: token_address.into(),
+            input: ITIP20::transferCall {
+                to: recipient3,
+                amount: U256::from(25_000_000), // 25 tokens
+            }
+            .abi_encode()
+            .into(),
+            value: U256::ZERO,
+        },
+    ];
+
+    let pending = provider
+        .send_transaction(TempoTransactionRequest {
+            calls,
+            ..Default::default()
+        })
+        .await?;
+    
+    let tx_hash = pending.tx_hash();
+    println!("Batch transaction sent: {tx_hash:?}");
+
+    // Wait for confirmation
+    let receipt = pending.get_receipt().await?;
+    println!("Batch confirmed in block: {:?}", receipt.block_number);
+
+    Ok(())
+}
+```
+
+```typescript TypeScript
+import { createWalletClient, http, encodeFunctionData } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const TIP20_ABI = [{
+  name: 'transfer',
+  type: 'function',
+  inputs: [
+    { name: 'to', type: 'address' },
+    { name: 'amount', type: 'uint256' }
+  ],
+  outputs: [{ type: 'bool' }]
+}];
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY);
+const client = createWalletClient({
+  account,
+  chain: {
+    id: 42431,
+    name: 'Tempo Testnet',
+    rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } }
+  },
+  transport: http()
+});
+
+const tokenAddress = '0x20c0000000000000000000000000000000000001';
+
+// Encode multiple transfer calls
+const calls = [
+  {
+    to: tokenAddress,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: TIP20_ABI,
+      functionName: 'transfer',
+      args: ['0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb', 100_000_000n]
+    })
+  },
+  {
+    to: tokenAddress,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: TIP20_ABI,
+      functionName: 'transfer',
+      args: ['0x70997970C51812dc3A010C7d01b50e0d17dc79C8', 50_000_000n]
+    })
+  },
+  {
+    to: tokenAddress,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: TIP20_ABI,
+      functionName: 'transfer',
+      args: ['0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC', 25_000_000n]
+    })
+  }
+];
+
+// Send Tempo Transaction with batch calls
+const hash = await client.sendTransaction({
+  to: account.address, // Tempo transactions target the sender
+  data: encodeTempoTransaction(calls), // Custom encoding for Tempo TX type
+  type: '0x76' // Tempo transaction type
+});
+
+console.log('Batch sent:', hash);
+```
+</CodeGroup>
+
+<Info>
+All calls in a batch execute atomically. If any call fails, the entire transaction reverts.
+</Info>
+
+## Batch with Memos
+
+Add memos to each transfer in a batch for individual tracking:
+
+```rust
+use alloy::primitives::B256;
+
+let calls = vec![
+    Call {
+        to: token_address.into(),
+        input: ITIP20::transferWithMemoCall {
+            to: recipient1,
+            amount: U256::from(100_000_000),
+            memo: B256::left_padding_from("PAYROLL-001".as_bytes()),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+    Call {
+        to: token_address.into(),
+        input: ITIP20::transferWithMemoCall {
+            to: recipient2,
+            amount: U256::from(50_000_000),
+            memo: B256::left_padding_from("PAYROLL-002".as_bytes()),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+];
+```
+
+## Multi-Token Batch
+
+Send different tokens in the same batch:
+
+```rust
+let alpha_usd = address!("0x20c0000000000000000000000000000000000001");
+let beta_usd = address!("0x20c0000000000000000000000000000000000002");
+
+let calls = vec![
+    // Send AlphaUSD
+    Call {
+        to: alpha_usd.into(),
+        input: ITIP20::transferCall {
+            to: recipient1,
+            amount: U256::from(100_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+    // Send BetaUSD
+    Call {
+        to: beta_usd.into(),
+        input: ITIP20::transferCall {
+            to: recipient1,
+            amount: U256::from(50_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+];
+```
+
+## Contract Interaction + Payments
+
+Combine token transfers with contract calls in a single batch:
+
+```rust
+use alloy::sol;
+
+// Define your contract ABI
+sol! {
+    interface IMyContract {
+        function processPayment(address recipient, uint256 amount) external;
+    }
+}
+
+let calls = vec![
+    // First: Transfer tokens to the contract
+    Call {
+        to: token_address.into(),
+        input: ITIP20::transferCall {
+            to: contract_address,
+            amount: U256::from(100_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+    // Then: Call contract function
+    Call {
+        to: contract_address.into(),
+        input: IMyContract::processPaymentCall {
+            recipient: final_recipient,
+            amount: U256::from(100_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+];
+```
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Payroll" icon="money-bill-wave">
+    Distribute salaries to multiple employees in one transaction
+  </Card>
+  <Card title="Settlements" icon="handshake">
+    Batch settlement payments to multiple vendors
+  </Card>
+  <Card title="Refunds" icon="rotate-left">
+    Process multiple customer refunds atomically
+  </Card>
+  <Card title="Airdrops" icon="parachute-box">
+    Distribute tokens to many recipients efficiently
+  </Card>
+  <Card title="DeFi Operations" icon="chart-line">
+    Swap and transfer in a single transaction
+  </Card>
+  <Card title="Multi-Sig" icon="users">
+    Execute complex multi-step payment flows
+  </Card>
+</CardGroup>
+
+## Dynamic Batch Generation
+
+Build batches dynamically from data:
+
+```rust
+use std::collections::HashMap;
+
+// Example: Load payroll data
+let payroll: HashMap<Address, u64> = [
+    (address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"), 100_000_000),
+    (address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"), 50_000_000),
+    (address!("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"), 75_000_000),
+].iter().cloned().collect();
+
+// Generate calls from payroll data
+let calls: Vec<Call> = payroll
+    .iter()
+    .map(|(recipient, amount)| Call {
+        to: token_address.into(),
+        input: ITIP20::transferCall {
+            to: *recipient,
+            amount: U256::from(*amount),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    })
+    .collect();
+
+let pending = provider
+    .send_transaction(TempoTransactionRequest {
+        calls,
+        ..Default::default()
+    })
+    .await?;
+```
+
+## Error Handling
+
+Since batch transactions are atomic, you should handle failures appropriately:
+
+```rust
+let result = provider
+    .send_transaction(TempoTransactionRequest {
+        calls,
+        ..Default::default()
+    })
+    .await;
+
+match result {
+    Ok(pending) => {
+        let receipt = pending.get_receipt().await?;
+        if receipt.status() {
+            println!("✓ Batch succeeded: {} transfers", calls.len());
+        } else {
+            println!("✗ Batch reverted - check individual call parameters");
+        }
+    }
+    Err(e) => {
+        eprintln!("Failed to send batch: {}", e);
+        // Implement retry logic or individual fallback
+    }
+}
+```
+
+## Limits and Considerations
+
+<AccordionGroup>
+  <Accordion title="Gas limits">
+    Batch transactions consume more gas. Estimate gas for large batches and split if necessary.
+  </Accordion>
+  <Accordion title="Atomic execution">
+    All operations succeed or fail together. Design batches to avoid partial failures.
+  </Accordion>
+  <Accordion title="Ordering">
+    Calls execute in the order specified. Ensure dependencies are ordered correctly.
+  </Accordion>
+  <Accordion title="Balance checks">
+    Verify sufficient token balance before sending large batches.
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+1. **Validate before batching**: Check balances and allowances before building the batch
+2. **Use memos**: Add unique identifiers to track individual payments in the batch
+3. **Monitor gas**: Large batches may exceed block gas limits - split if needed
+4. **Test atomicity**: Verify rollback behavior in test scenarios
+5. **Log batch details**: Store batch metadata off-chain for reconciliation
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fee Sponsorship" icon="hand-holding-dollar" href="/guides/fee-sponsorship">
+    Combine batches with fee sponsorship to pay gas for users
+  </Card>
+  <Card title="Smart Accounts" icon="key" href="/guides/smart-accounts">
+    Use access keys to delegate batch payment permissions
+  </Card>
+  <Card title="Tempo Transaction" icon="book" href="/concepts/tempo-transactions">
+    Learn more about Tempo Transaction features
+  </Card>
+  <Card title="Making Payments" icon="money-bill-transfer" href="/guides/making-payments">
+    Return to basic payment operations
+  </Card>
+</CardGroup>

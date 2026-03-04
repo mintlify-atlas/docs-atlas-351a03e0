@@ -1,0 +1,363 @@
+---
+title: tempo-consensus
+description: Tempo's consensus validation implementation
+---
+
+The `tempo-consensus` crate implements Tempo's consensus validation logic, extending Ethereum's consensus rules with Tempo-specific block and transaction validation.
+
+## Installation
+
+```toml
+[dependencies]
+tempo-consensus = "0.1.0"
+```
+
+## Core Types
+
+### TempoConsensus
+
+Main consensus implementation for Tempo.
+
+```rust
+use tempo_consensus::TempoConsensus;
+use std::sync::Arc;
+use tempo_chainspec::TempoChainSpec;
+
+// Create consensus validator
+let chain_spec = Arc::new(TempoChainSpec::mainnet());
+let consensus = TempoConsensus::new(chain_spec);
+```
+
+**Source:** `crates/consensus/src/lib.rs:36-50`
+
+## Header Validation
+
+Implements `HeaderValidator<TempoHeader>` trait.
+
+### validate_header
+
+Validates a sealed header against consensus rules.
+
+```rust
+use tempo_consensus::TempoConsensus;
+use reth_primitives_traits::SealedHeader;
+use tempo_primitives::TempoHeader;
+
+let consensus = TempoConsensus::new(chain_spec);
+let sealed_header: SealedHeader<TempoHeader> = get_header();
+
+// Validate header
+consensus.validate_header(&sealed_header)?;
+```
+
+**Validation Rules:**
+
+1. **Standard Ethereum checks** (via inner `EthBeaconConsensus`):
+   - Valid PoW/PoS seal
+   - Valid extra data size (≤ 10 KiB for Tempo)
+   - Valid EIP-1559 base fee
+   - Valid blob gas parameters
+
+2. **Timestamp validation**:
+   - Must not be more than 3 seconds in the future
+   - Milliseconds part must be < 1000
+
+3. **Gas limit validation**:
+   - `sharedGasLimit` must equal `blockGasLimit / 10`
+   - `generalGasLimit` must match expected value:
+     - Pre-T1: `(blockGasLimit - sharedGasLimit) / 2`
+     - T1+: Fixed at 30M
+
+**Source:** `crates/consensus/src/lib.rs:53-96`
+
+### validate_header_against_parent
+
+Validates a header against its parent.
+
+```rust
+let consensus = TempoConsensus::new(chain_spec);
+
+// Validate child against parent
+consensus.validate_header_against_parent(
+    &child_header,
+    &parent_header
+)?;
+```
+
+**Additional Validation:**
+
+1. **Standard parent checks**:
+   - Correct parent hash and number
+   - Valid gas limit adjustment
+   - Valid EIP-1559 base fee progression
+   - Valid EIP-4844 blob parameters
+
+2. **Timestamp progression**:
+   - Child timestamp (with milliseconds) must be > parent timestamp
+
+**Source:** `crates/consensus/src/lib.rs:98-129`
+
+## Block Validation
+
+### validate_body_against_header
+
+Validates block body against header.
+
+```rust
+use tempo_primitives::BlockBody;
+
+let consensus = TempoConsensus::new(chain_spec);
+
+// Validate body matches header
+consensus.validate_body_against_header(
+    &block_body,
+    &sealed_header
+)?;
+```
+
+Verifies:
+- Transaction root matches
+- Withdrawal root matches (if present)
+- Ommer root matches (always empty for Tempo)
+
+**Source:** `crates/consensus/src/lib.rs:133-139`
+
+### validate_block_pre_execution
+
+Validates block before EVM execution.
+
+```rust
+use reth_primitives_traits::SealedBlock;
+use tempo_primitives::Block;
+
+let consensus = TempoConsensus::new(chain_spec);
+let sealed_block: SealedBlock<Block> = get_block();
+
+// Pre-execution validation
+consensus.validate_block_pre_execution(&sealed_block)?;
+```
+
+**Validation Rules:**
+
+1. **System transaction validation**:
+   - All system transactions must be valid for the chain ID
+   - System transactions must have correct signature
+
+2. **End-of-block system transactions**:
+   - Block must contain exactly 1 system transaction at the end
+   - System transaction must target `Address::ZERO` (subblock metadata)
+
+3. **System transaction order**:
+   - Subblock metadata system tx must be last
+
+**Source:** `crates/consensus/src/lib.rs:141-183`
+
+### validate_block_post_execution
+
+Validates block after EVM execution.
+
+```rust
+use reth_primitives_traits::RecoveredBlock;
+use alloy_evm::block::BlockExecutionResult;
+
+let consensus = TempoConsensus::new(chain_spec);
+let recovered_block: RecoveredBlock<Block> = execute_block();
+let result: BlockExecutionResult<TempoReceipt> = get_result();
+
+// Post-execution validation
+consensus.validate_block_post_execution(
+    &recovered_block,
+    &result
+)?;
+```
+
+Verifies:
+- Receipt root matches header
+- Gas used matches header
+- Blob gas used matches (if applicable)
+- Requests hash matches (if applicable)
+
+**Source:** `crates/consensus/src/lib.rs:186-193`
+
+## Constants
+
+### ALLOWED_FUTURE_BLOCK_TIME_SECONDS
+
+Maximum time a block timestamp can be in the future.
+
+```rust
+use tempo_consensus::ALLOWED_FUTURE_BLOCK_TIME_SECONDS;
+
+// Blocks can be up to 3 seconds in the future
+pub const ALLOWED_FUTURE_BLOCK_TIME_SECONDS: u64 = 3;
+```
+
+**Source:** `crates/consensus/src/lib.rs:26`
+
+### TEMPO_SHARED_GAS_DIVISOR
+
+Divisor for calculating shared gas limit.
+
+```rust
+use tempo_consensus::TEMPO_SHARED_GAS_DIVISOR;
+
+// shared_gas_limit = block_gas_limit / 10
+pub const TEMPO_SHARED_GAS_DIVISOR: u64 = 10;
+```
+
+Shared gas limit is used for payment lane transactions.
+
+**Source:** `crates/consensus/src/lib.rs:29-30`
+
+### TEMPO_MAXIMUM_EXTRA_DATA_SIZE
+
+Maximum size of extra data in block headers.
+
+```rust
+use tempo_consensus::TEMPO_MAXIMUM_EXTRA_DATA_SIZE;
+
+// Max extra data: 10 KiB (vs 32 bytes for Ethereum)
+pub const TEMPO_MAXIMUM_EXTRA_DATA_SIZE: usize = 10 * 1_024;
+```
+
+Larger than Ethereum's 32 bytes to accommodate DKG ceremony data.
+
+**Source:** `crates/consensus/src/lib.rs:33`
+
+## System Transactions
+
+Tempo blocks must include system transactions at the end for:
+
+1. **Subblock Metadata** (required):
+   - Target: `Address::ZERO`
+   - Contains validator fee recipient mappings
+   - Encoded as RLP list of `SubBlockMetadata` structs
+
+System transaction signature:
+```rust
+use alloy_primitives::{Signature, U256};
+
+pub const TEMPO_SYSTEM_TX_SIGNATURE: Signature = 
+    Signature::new(U256::ZERO, U256::ZERO, false);
+```
+
+## Gas Limit Rules
+
+### Pre-T1 (T0 and earlier)
+
+Gas limits are calculated dynamically:
+
+```rust
+let block_gas_limit = 500_000_000;
+let shared_gas_limit = block_gas_limit / 10; // 50M
+let general_gas_limit = (block_gas_limit - shared_gas_limit) / 2; // 225M
+```
+
+### T1 and later (TIP-1000)
+
+General gas limit is fixed at 30M:
+
+```rust
+let block_gas_limit = 500_000_000;
+let shared_gas_limit = block_gas_limit / 10; // 50M  
+let general_gas_limit = 30_000_000; // Fixed at 30M
+```
+
+References: [TIP-1000](https://docs.tempo.xyz/protocol/tips/tip-1000)
+
+**Source:** Chain spec method `general_gas_limit_at()`
+
+## Example: Full Block Validation
+
+```rust
+use tempo_consensus::TempoConsensus;
+use reth_consensus::{Consensus, FullConsensus};
+use tempo_primitives::{Block, TempoReceipt};
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    // Setup
+    let chain_spec = Arc::new(TempoChainSpec::mainnet());
+    let consensus = TempoConsensus::new(chain_spec);
+    
+    // Get block
+    let sealed_block = get_sealed_block().await?;
+    
+    // 1. Validate header
+    consensus.validate_header(sealed_block.header())?;
+    
+    // 2. Validate header against parent
+    let parent = get_parent_header().await?;
+    consensus.validate_header_against_parent(
+        sealed_block.header(),
+        &parent
+    )?;
+    
+    // 3. Validate body against header
+    consensus.validate_body_against_header(
+        sealed_block.body(),
+        sealed_block.header()
+    )?;
+    
+    // 4. Pre-execution validation
+    consensus.validate_block_pre_execution(&sealed_block)?;
+    
+    // 5. Execute block
+    let (recovered_block, result) = execute_block(sealed_block)?;
+    
+    // 6. Post-execution validation
+    consensus.validate_block_post_execution(
+        &recovered_block,
+        &result
+    )?;
+    
+    println!("Block is valid!");
+    Ok(())
+}
+```
+
+## Timestamp Precision
+
+Tempo blocks include millisecond-precision timestamps:
+
+```rust
+use tempo_primitives::TempoHeader;
+
+// Full timestamp calculation
+let timestamp_ms = header.timestamp() * 1000 + header.timestamp_millis_part;
+
+// When validating against parent:
+let parent_timestamp_ms = parent.timestamp() * 1000 + parent.timestamp_millis_part;
+assert!(timestamp_ms > parent_timestamp_ms);
+```
+
+**Source:** `crates/consensus/src/lib.rs:121-126`
+
+## Error Handling
+
+Consensus validation returns `ConsensusError`:
+
+```rust
+use reth_consensus::ConsensusError;
+
+match consensus.validate_header(&header) {
+    Ok(_) => println!("Valid header"),
+    Err(ConsensusError::TimestampIsInFuture { timestamp, present_timestamp }) => {
+        eprintln!("Block timestamp {timestamp} is in the future (now: {present_timestamp})");
+    }
+    Err(ConsensusError::Other(msg)) => {
+        eprintln!("Validation error: {msg}");
+    }
+    Err(e) => {
+        eprintln!("Error: {e}");
+    }
+}
+```
+
+## See Also
+
+- [tempo-evm](/api/rust/tempo-evm) - EVM execution
+- [tempo-primitives](/api/rust/tempo-primitives) - Block and transaction types
+- [tempo-chainspec](https://github.com/tempo-chain/tempo) - Chain specification
+- [TIP-1000](https://docs.tempo.xyz/protocol/tips/tip-1000) - Gas limit changes

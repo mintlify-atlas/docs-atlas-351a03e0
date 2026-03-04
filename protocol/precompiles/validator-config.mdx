@@ -1,0 +1,419 @@
+---
+title: Validator Config Precompile
+description: Manage consensus validators and DKG ceremony scheduling
+---
+
+The Validator Config precompile manages the set of validators that participate in Tempo's consensus mechanism. It provides functions for adding validators, updating their information, and scheduling DKG (Distributed Key Generation) ceremonies.
+
+## Address
+
+```
+0xCCCCCCCC00000000000000000000000000000000
+```
+
+## Overview
+
+The precompile enables:
+
+- **Validator Registry**: Maintain the active validator set
+- **Dynamic Updates**: Add/remove validators and update their info
+- **Identity Rotation**: Validators can rotate to new addresses
+- **DKG Scheduling**: Schedule fresh DKG ceremonies for key updates
+- **Owner Control**: All modifications require owner authorization
+
+## Interface
+
+```solidity
+interface IValidatorConfig {
+    struct Validator {
+        bytes32 publicKey;
+        bool active;
+        uint64 index;
+        address validatorAddress;
+        string inboundAddress;   // <hostname|ip>:<port>
+        string outboundAddress;  // <ip>:<port>
+    }
+    
+    // View functions
+    function getValidators() 
+        external view returns (Validator[] memory validators);
+    
+    function owner() external view returns (address);
+    
+    function getNextFullDkgCeremony() external view returns (uint64);
+    
+    // Owner functions
+    function addValidator(
+        address newValidatorAddress,
+        bytes32 publicKey,
+        bool active,
+        string calldata inboundAddress,
+        string calldata outboundAddress
+    ) external;
+    
+    function changeOwner(address newOwner) external;
+    
+    function changeValidatorStatus(address validator, bool active) external;
+    
+    function changeValidatorStatusByIndex(uint64 index, bool active) external;
+    
+    function setNextFullDkgCeremony(uint64 epoch) external;
+    
+    // Validator functions
+    function updateValidator(
+        address newValidatorAddress,
+        bytes32 publicKey,
+        string calldata inboundAddress,
+        string calldata outboundAddress
+    ) external;
+}
+```
+
+### Errors
+
+```solidity
+error Unauthorized();
+error ValidatorAlreadyExists();
+error ValidatorNotFound();
+error InvalidPublicKey();
+error NotHostPort(string field, string input, string backtrace);
+error NotIpPort(string field, string input, string backtrace);
+```
+
+## Validator Structure
+
+### Public Key
+
+Ed25519 public key for consensus signatures:
+
+```solidity
+bytes32 publicKey;  // 32-byte Ed25519 public key
+```
+
+<Note>
+  Cannot be zero. Zero is used as a sentinel value to indicate non-existence.
+</Note>
+
+### Active Status
+
+Whether the validator participates in consensus:
+
+```solidity
+bool active;  // true = participating, false = inactive
+```
+
+Inactive validators remain in the set but don't produce blocks.
+
+### Addresses
+
+Two types of addresses:
+
+```solidity
+string inboundAddress;   // Where others connect TO this validator
+string outboundAddress;  // IP for firewall rules
+```
+
+**Inbound**: Can be hostname or IP with port
+```
+"validator1.tempo.xyz:26656"
+"192.168.1.100:26656"
+```
+
+**Outbound**: Must be IP with port (for firewall whitelisting)
+```
+"192.168.1.100:26656"  // ✅ Valid
+"validator1.tempo.xyz:26656"  // ❌ Invalid (hostname not allowed)
+```
+
+## Owner Operations
+
+### Adding a Validator
+
+```solidity
+contract ValidatorManager {
+    IValidatorConfig constant CONFIG = 
+        IValidatorConfig(0xCCCCCCCC00000000000000000000000000000000);
+    
+    function addNewValidator() external {
+        require(msg.sender == CONFIG.owner(), "Not owner");
+        
+        CONFIG.addValidator(
+            0x1234567890123456789012345678901234567890,  // validator address
+            0xabcd...,  // Ed25519 public key
+            true,       // active
+            "validator1.tempo.xyz:26656",  // inbound
+            "192.168.1.100:26656"  // outbound
+        );
+    }
+}
+```
+
+### Changing Owner
+
+```solidity
+function transferOwnership(address newOwner) external {
+    require(msg.sender == CONFIG.owner(), "Not owner");
+    CONFIG.changeOwner(newOwner);
+}
+```
+
+### Activating/Deactivating Validators
+
+```solidity
+// By address (deprecated, use by index)
+function deactivateValidator(address validator) external {
+    require(msg.sender == CONFIG.owner(), "Not owner");
+    CONFIG.changeValidatorStatus(validator, false);
+}
+
+// By index (T1+, prevents front-running)
+function deactivateValidatorByIndex(uint64 index) external {
+    require(msg.sender == CONFIG.owner(), "Not owner");
+    CONFIG.changeValidatorStatusByIndex(index, false);
+}
+```
+
+<Warning>
+  Use `changeValidatorStatusByIndex` instead of `changeValidatorStatus` to prevent 
+  front-running attacks where a validator rotates their address immediately before 
+  being deactivated.
+</Warning>
+
+## Validator Operations
+
+### Updating Validator Info
+
+Validators can update their own information:
+
+```solidity
+function updateMyInfo() external {
+    // Only the validator itself can call this
+    CONFIG.updateValidator(
+        msg.sender,  // keep same address
+        newPublicKey,
+        "validator1-new.tempo.xyz:26656",
+        "192.168.1.200:26656"
+    );
+}
+```
+
+### Rotating to New Address
+
+```solidity
+function rotateAddress(address newAddress) external {
+    // Validator rotates to new address
+    CONFIG.updateValidator(
+        newAddress,  // new address
+        publicKey,
+        inboundAddress,
+        outboundAddress
+    );
+    // Old address becomes invalid, new address takes over
+}
+```
+
+<Note>
+  Address rotation updates the validators array to point to the new address 
+  and clears all storage at the old address.
+</Note>
+
+## DKG Ceremony Scheduling
+
+### What is DKG?
+
+Distributed Key Generation (DKG) creates shared keys for threshold signatures without any single party knowing the complete key.
+
+### Scheduling a Fresh DKG
+
+```solidity
+function scheduleDKG(uint64 epoch) external {
+    require(msg.sender == CONFIG.owner(), "Not owner");
+    CONFIG.setNextFullDkgCeremony(epoch);
+    
+    // DKG runs in epoch N
+    // New keys active in epoch N+1
+}
+
+function checkScheduledDKG() public view returns (uint64) {
+    return CONFIG.getNextFullDkgCeremony();
+    // Returns 0 if no DKG scheduled
+}
+```
+
+### DKG Timeline
+
+```
+Epoch N:   Run fresh DKG ceremony
+Epoch N+1: Use new DKG keys
+```
+
+## Querying Validators
+
+### Get All Validators
+
+```solidity
+function getAllValidators() public view returns (
+    IValidatorConfig.Validator[] memory
+) {
+    return CONFIG.getValidators();
+}
+```
+
+### Filter Active Validators
+
+```solidity
+function getActiveValidators() public view returns (
+    IValidatorConfig.Validator[] memory
+) {
+    IValidatorConfig.Validator[] memory all = CONFIG.getValidators();
+    
+    // Count active
+    uint256 activeCount = 0;
+    for (uint i = 0; i < all.length; i++) {
+        if (all[i].active) activeCount++;
+    }
+    
+    // Build result
+    IValidatorConfig.Validator[] memory active = 
+        new IValidatorConfig.Validator[](activeCount);
+    uint256 j = 0;
+    for (uint i = 0; i < all.length; i++) {
+        if (all[i].active) {
+            active[j++] = all[i];
+        }
+    }
+    
+    return active;
+}
+```
+
+## Gas Costs
+
+| Operation | Cold | Warm |
+|-----------|------|------|
+| `addValidator` | ~180,000 gas | ~90,000 gas |
+| `updateValidator` | ~80,000 gas | ~40,000 gas |
+| `changeValidatorStatus` | ~25,000 gas | ~10,000 gas |
+| `getValidators` | ~5,000 + 2,000 per validator | ~1,000 + 500 per validator |
+| `owner` | ~2,300 gas | ~300 gas |
+
+## Storage Layout
+
+```solidity
+// Slot 0: Owner
+address owner;
+
+// Slot 1: Validators array (validator addresses)
+address[] validators_array;
+
+// Slot 2: Validator info mapping
+mapping(address => Validator) validators;
+
+// Slot 3: Next DKG ceremony epoch
+uint64 next_dkg_ceremony;
+```
+
+## Security Considerations
+
+### Owner Security
+
+The owner has full control over the validator set:
+
+- Can add/remove validators
+- Can activate/deactivate validators  
+- Can schedule DKG ceremonies
+
+**Best Practice**: Use a multi-sig wallet as owner.
+
+### Public Key Validity
+
+Public keys must be valid Ed25519 keys:
+
+```solidity
+// ❌ Invalid: Zero key
+addValidator(addr, bytes32(0), ...);  // Reverts with InvalidPublicKey
+
+// ✅ Valid: Non-zero key
+addValidator(addr, validEd25519Key, ...);
+```
+
+### Address Validation
+
+Addresses must be valid formats:
+
+```solidity
+// ✅ Valid inbound addresses
+"validator.tempo.xyz:26656"  // hostname:port
+"192.168.1.100:26656"        // ip:port
+"[2001:db8::1]:26656"        // ipv6:port
+
+// ✅ Valid outbound addresses  
+"192.168.1.100:26656"        // ip:port only
+"[2001:db8::1]:26656"        // ipv6:port
+
+// ❌ Invalid outbound addresses
+"validator.tempo.xyz:26656"  // hostnames not allowed
+```
+
+## Consensus Integration
+
+The consensus layer reads validator information from the precompile:
+
+```rust
+// Consensus reads validators at epoch boundaries
+let validators = validator_config.get_validators()?;
+
+// Filter active validators
+let active: Vec<_> = validators
+    .into_iter()
+    .filter(|v| v.active)
+    .collect();
+
+// Use for block production
+for validator in active {
+    schedule_block_production(validator);
+}
+```
+
+## Best Practices
+
+### Validator Management
+
+```solidity
+// ✅ Good: Add validators with unique addresses
+addValidator(addr1, key1, ...);
+addValidator(addr2, key2, ...);
+
+// ❌ Bad: Duplicate addresses
+addValidator(addr1, key1, ...);
+addValidator(addr1, key2, ...);  // Reverts
+```
+
+### Active Status
+
+```solidity
+// ✅ Good: Deactivate before removal (if needed)
+changeValidatorStatus(addr, false);
+// Later: can remove or reactivate
+
+// ✅ Good: Add initially inactive, activate when ready
+addValidator(addr, key, false, ...);  // inactive
+// Test, verify, then:
+changeValidatorStatus(addr, true);
+```
+
+### DKG Scheduling
+
+```solidity
+// ✅ Good: Schedule DKG in advance
+setNextFullDkgCeremony(currentEpoch + 100);
+
+// ❌ Bad: Schedule in past or current epoch
+setNextFullDkgCeremony(currentEpoch - 1);  // Too late
+```
+
+## See Also
+
+- [Consensus Mechanism](/concepts/consensus)
+- [Validator Guide](/node/running)
+- [DKG Protocol](/concepts/consensus)

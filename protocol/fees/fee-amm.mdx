@@ -1,0 +1,549 @@
+---
+title: Fee AMM
+description: Automatic stablecoin conversion for fee payments using directional liquidity pools
+---
+
+The **Fee AMM** (Automated Market Maker) enables automatic conversion between different USD-denominated stablecoins during fee payment. When a user pays fees in one stablecoin and the validator prefers a different one, the Fee AMM converts between them seamlessly.
+
+## Overview
+
+The Fee AMM is a specialized AMM deployed as a precompile at:
+
+```
+0xfeeC000000000000000000000000000000000000 (FeeManager contract)
+```
+
+It provides:
+
+- **Automatic conversion** between USD stablecoins during fee payment
+- **Directional pools** optimized for one-way flow (user token → validator token)
+- **Simple linear pricing** with a 0.3% conversion spread
+- **Single-sided liquidity** provision (validator token only)
+- **Rebalancing mechanism** for arbitrage and liquidity management
+
+## Pool Design
+
+### Directional Pools
+
+Each `(userToken, validatorToken)` pair has its **own directional pool**:
+
+```solidity
+poolId = keccak256(abi.encode(userToken, validatorToken))
+```
+
+Key properties:
+
+- **Ordered pairs**: `(USDC → pathUSD)` is a **different pool** than `(pathUSD → USDC)`
+- **Independent reserves**: Each direction maintains separate reserves
+- **Optimized for one-way flow**: User → validator conversions during fee payment
+
+**Example**: If users pay in USDC and validators want pathUSD:
+
+```
+Pool: (USDC → pathUSD)
+  User Token Reserve:      1,000,000 USDC (grows as users pay fees)
+  Validator Token Reserve:   500,000 pathUSD (shrinks as fees are converted)
+```
+
+The reverse pool `(pathUSD → USDC)` would have different reserves and serve a different purpose.
+
+### Pool Structure
+
+```solidity
+struct Pool {
+    uint128 reserveUserToken;      // Accumulated user token (from fee payments)
+    uint128 reserveValidatorToken; // Validator token (for conversion)
+}
+```
+
+See `FeeAMM.sol:10`.
+
+## Conversion Pricing
+
+The Fee AMM uses a **simple linear pricing model** for fee conversions:
+
+```solidity
+M = 0.9970  (scaled as 9970/10000)
+N = 0.9985  (scaled as 9985/10000)
+```
+
+See `FeeAMM.sol:12-13`.
+
+### Fee Swap (User → Validator)
+
+During fee payment, the protocol calls `executeFeeSwap`:
+
+```solidity
+amountOut = amountIn × M
+          = amountIn × 0.9970
+```
+
+This provides a **0.3% conversion spread** (1 - 0.9970 = 0.003).
+
+**Example**:
+
+```
+User pays:     100,000 USDC
+AmountOut:     100,000 × 0.9970 = 99,700 pathUSD
+Validator receives: 99,700 pathUSD
+Spread:        300 USDC (0.3%)
+```
+
+The spread compensates liquidity providers for the directional flow risk.
+
+See `FeeAMM.sol:65-85`.
+
+### Rebalance Swap (Validator → User)
+
+Liquidity providers or arbitrageurs can call `rebalanceSwap` to buy accumulated user tokens:
+
+```solidity
+amountIn = (amountOut × N / SCALE) + 1
+         = (amountOut × 0.9985 / 1.0000) + 1
+```
+
+Rounding up ensures the pool doesn't lose value.
+
+**Example**:
+
+```
+Arbitrageur wants: 100,000 USDC (from accumulated user tokens)
+AmountIn required: (100,000 × 9985 / 10000) + 1 = 99,851 pathUSD
+Spread:            149 USDC (0.15%)
+```
+
+The tighter spread (0.15% vs 0.3%) incentivizes rebalancing activity.
+
+See `FeeAMM.sol:87-125`.
+
+## Liquidity Provision
+
+The Fee AMM supports **single-sided liquidity provision** with validator tokens only.
+
+### Adding Liquidity
+
+Liquidity providers call `mint` to add validator tokens:
+
+```solidity
+function mint(
+    address userToken,
+    address validatorToken,
+    uint256 amountValidatorToken,
+    address to
+) external returns (uint256 liquidity)
+```
+
+See `FeeAMM.sol:127-182`.
+
+**First liquidity provider**:
+
+```solidity
+liquidity = amountValidatorToken / 2 - MIN_LIQUIDITY
+
+where:
+  MIN_LIQUIDITY = 1,000 (permanently locked)
+```
+
+The minimum liquidity lock prevents certain edge cases and ensures pools always have reserves.
+
+**Example (initial deposit)**:
+
+```
+Deposit:        1,000,000 pathUSD
+Liquidity minted: (1,000,000 / 2) - 1,000 = 499,000 LP tokens
+Locked:         1,000 LP tokens (permanently)
+```
+
+**Subsequent providers**:
+
+The formula accounts for accumulated user tokens from fee payments:
+
+```solidity
+liquidity = amountValidatorToken × totalSupply / (V + n × U)
+
+where:
+  V = current validator token reserve
+  U = current user token reserve
+  n = N / SCALE = 0.9985 (rebalance conversion rate)
+  totalSupply = total LP tokens outstanding
+```
+
+This ensures LPs receive shares proportional to the pool's total value, including both validator tokens and accumulated user tokens (valued at the rebalance rate).
+
+See `FeeAMM.sol:156-162`.
+
+### Removing Liquidity
+
+LPs call `burn` to redeem their share:
+
+```solidity
+function burn(
+    address userToken,
+    address validatorToken,
+    uint256 liquidity,
+    address to
+) external returns (
+    uint256 amountUserToken,
+    uint256 amountValidatorToken
+)
+```
+
+LPs receive a **pro-rata share of both reserves**:
+
+```solidity
+amountUserToken = liquidity × pool.reserveUserToken / totalSupply
+amountValidatorToken = liquidity × pool.reserveValidatorToken / totalSupply
+```
+
+This means LPs receive:
+- Their share of **validator tokens** (what they deposited)
+- Their share of **user tokens** (accumulated from fee swaps)
+
+See `FeeAMM.sol:184-232`.
+
+## Pool Lifecycle Example
+
+Consider a `(USDC → pathUSD)` pool:
+
+### 1. Initial Liquidity
+
+```
+LP deposits:    1,000,000 pathUSD
+
+Pool state:
+  reserveUserToken:      0 USDC
+  reserveValidatorToken: 1,000,000 pathUSD
+  totalSupply:           499,000 LP tokens
+  locked:                1,000 LP tokens
+```
+
+### 2. Fee Conversions
+
+Users pay fees in USDC, protocol converts to pathUSD:
+
+```
+User pays:      10,000 USDC
+Protocol calls: executeFeeSwap(USDC, pathUSD, 10,000)
+AmountOut:      10,000 × 0.9970 = 9,970 pathUSD
+
+Pool state:
+  reserveUserToken:      10,000 USDC (accumulated)
+  reserveValidatorToken: 990,030 pathUSD (depleted)
+```
+
+After many fee payments:
+
+```
+Pool state:
+  reserveUserToken:      1,000,000 USDC (highly accumulated)
+  reserveValidatorToken: 30,000 pathUSD (nearly depleted)
+```
+
+<Warning>
+If `reserveValidatorToken` falls below the required conversion amount, `executeFeeSwap` reverts with `InsufficientLiquidity`. Users must either:
+1. Switch to a fee token with sufficient liquidity
+2. Wait for rebalancing
+3. Provide liquidity themselves
+</Warning>
+
+### 3. Rebalancing
+
+An arbitrageur notices the imbalance and calls `rebalanceSwap`:
+
+```
+Arbitrageur calls: rebalanceSwap(USDC, pathUSD, 500,000, recipient)
+
+AmountIn required: (500,000 × 0.9985) + 1 = 499,251 pathUSD
+
+Pool state:
+  reserveUserToken:      500,000 USDC (rebalanced)
+  reserveValidatorToken: 529,251 pathUSD (replenished)
+```
+
+The arbitrageur receives 500,000 USDC for 499,251 pathUSD, earning approximately 749 USDC (0.15% spread) by helping rebalance the pool.
+
+### 4. LP Withdrawal
+
+The original LP decides to withdraw:
+
+```
+LP burns:       499,000 LP tokens (all their shares)
+
+Amounts returned:
+  USDC:         500,000 × 499,000 / 500,000 = 499,000 USDC
+  pathUSD:      529,251 × 499,000 / 500,000 = 528,195 pathUSD
+
+Total value:  ~1,027,195 USD (deposited 1,000,000)
+Profit:       ~27,195 USD (2.7% gain from fee conversion spreads)
+```
+
+The LP profits from the 0.3% spread on all fee conversions that flowed through their pool.
+
+## Liquidity Incentives
+
+Liquidity providers earn returns from:
+
+1. **Conversion spreads** (0.3% on all user → validator swaps)
+2. **Accumulated user tokens** (captured when LPs withdraw)
+3. **Potential stablecoin basis** (if user token trades at premium)
+
+Key risks:
+
+1. **Directional flow**: Pools naturally accumulate user tokens and deplete validator tokens
+2. **Stablecoin depeg**: If user token depegs below $1, LPs hold devalued assets
+3. **Liquidity depletion**: If validator token reserve empties, no fees can be converted
+
+<Tip>
+Validators have a natural incentive to provide liquidity to their own preferred tokens, as this enables users to pay fees in any stablecoin while the validator receives their preferred one.
+</Tip>
+
+## Rebalancing Mechanisms
+
+### Manual Rebalancing
+
+Anyone can call `rebalanceSwap` to trade validator tokens for accumulated user tokens:
+
+```solidity
+function rebalanceSwap(
+    address userToken,
+    address validatorToken,
+    uint256 amountOut,
+    address to
+) external returns (uint256 amountIn)
+```
+
+**Use cases**:
+- **Arbitrage**: Buy user tokens at 0.15% discount, sell on external market
+- **Validator management**: Validators convert their accumulated user tokens
+- **LP rebalancing**: LPs manage their pool positions
+
+See `FeeAMM.sol:87-125`.
+
+### Market-Driven Rebalancing
+
+The pricing spread incentivizes natural rebalancing:
+
+```
+Fee swap spread:       0.3% (user pays premium)
+Rebalance spread:      0.15% (rebalancer gets discount)
+Net LP profit:         0.15% per round-trip
+```
+
+This creates a profitable arbitrage opportunity that naturally balances pools.
+
+## Required Token Checks
+
+All Fee AMM operations require tokens to be:
+
+1. **Valid TIP-20 tokens** (deployed via TIP20Factory)
+2. **USD-denominated** (`currency() == "USD"`)
+
+The AMM validates this using:
+
+```solidity
+function _requireUSDTIP20(address token) internal view {
+    if (!TempoUtilities.isTIP20(token)) revert InvalidToken();
+    if (keccak256(bytes(ITIP20(token).currency())) != keccak256(bytes("USD"))) {
+        revert InvalidCurrency();
+    }
+}
+```
+
+See `FeeAMM.sol:30-36`.
+
+This ensures only USD stablecoins participate in fee conversion, maintaining the dollar-denominated fee model.
+
+## Pool Discovery
+
+### Get Pool ID
+
+```solidity
+function getPoolId(
+    address userToken,
+    address validatorToken
+) public pure returns (bytes32)
+```
+
+See `FeeAMM.sol:38-41`.
+
+### Get Pool State
+
+```solidity
+function getPool(
+    address userToken,
+    address validatorToken
+) external view returns (Pool memory)
+```
+
+Returns the current reserves for the directional pool.
+
+See `FeeAMM.sol:43-50`.
+
+### Check Liquidity
+
+Before attempting a fee conversion, the protocol checks liquidity:
+
+```solidity
+function checkSufficientLiquidity(
+    address userToken,
+    address validatorToken,
+    uint256 maxAmount
+) internal view
+```
+
+This is called during transaction validation to ensure the pool can handle the maximum possible fee.
+
+See `FeeAMM.sol:52-63`.
+
+## Integration with FeeManager
+
+The Fee AMM is tightly integrated with the FeeManager precompile:
+
+### Pre-Transaction Check
+
+```solidity
+// In collectFeePreTx
+if (userToken != validatorToken) {
+    checkSufficientLiquidity(userToken, validatorToken, maxAmount);
+}
+```
+
+See `FeeManager.sol:57-59`.
+
+### Post-Transaction Conversion
+
+```solidity
+// In collectFeePostTx
+if (userToken != validatorToken && actualUsed > 0) {
+    uint256 amountOut = executeFeeSwap(userToken, validatorToken, actualUsed);
+    collectedFees[feeRecipient][validatorToken] += amountOut;
+}
+```
+
+See `FeeManager.sol:81-83`.
+
+## Gas Costs
+
+Fee AMM operations have the following approximate gas costs:
+
+| Operation | Gas Cost |
+|-----------|----------|
+| executeFeeSwap | ~15,000 |
+| rebalanceSwap | ~45,000 |
+| mint (first LP) | ~180,000 |
+| mint (subsequent) | ~90,000 |
+| burn | ~65,000 |
+
+These costs are automatically included in the transaction gas when fee conversion is required.
+
+## Usage Examples
+
+### Providing Liquidity
+
+```solidity
+import { IFeeAMM } from "./interfaces/IFeeAMM.sol";
+import { IERC20 } from "./interfaces/IERC20.sol";
+
+contract LiquidityProvider {
+    IFeeAMM constant FEE_AMM = IFeeAMM(0xfeeC000000000000000000000000000000000000);
+
+    function provideLiquidity(
+        address userToken,    // e.g., USDC
+        address validatorToken, // e.g., pathUSD
+        uint256 amount
+    ) external {
+        // Approve the FeeAMM to spend validator tokens
+        IERC20(validatorToken).approve(address(FEE_AMM), amount);
+
+        // Add liquidity (single-sided, validator token only)
+        uint256 liquidity = FEE_AMM.mint(
+            userToken,
+            validatorToken,
+            amount,
+            msg.sender  // LP tokens sent to caller
+        );
+    }
+}
+```
+
+### Rebalancing
+
+```solidity
+contract Arbitrageur {
+    IFeeAMM constant FEE_AMM = IFeeAMM(0xfeeC000000000000000000000000000000000000);
+
+    function rebalancePool(
+        address userToken,
+        address validatorToken,
+        uint256 desiredUserTokens
+    ) external {
+        // Calculate required validator tokens
+        uint256 amountIn = (desiredUserTokens * 9985) / 10000 + 1;
+
+        // Approve validator token
+        IERC20(validatorToken).approve(address(FEE_AMM), amountIn);
+
+        // Execute rebalance swap
+        uint256 actualAmountIn = FEE_AMM.rebalanceSwap(
+            userToken,
+            validatorToken,
+            desiredUserTokens,
+            msg.sender  // User tokens sent to caller
+        );
+    }
+}
+```
+
+## Security Considerations
+
+### Integer Overflow Protection
+
+All reserve amounts are stored as `uint128`, with explicit checks:
+
+```solidity
+function _requireU128(uint256 x) internal pure {
+    if (x > type(uint128).max) revert InvalidAmount();
+}
+```
+
+See `FeeAMM.sol:24-27`.
+
+### Reentrancy Protection
+
+The Fee AMM uses the checks-effects-interactions pattern and updates reserves before external calls:
+
+```solidity
+// Update reserves first
+pool.reserveValidatorToken += uint128(amountIn);
+pool.reserveUserToken -= uint128(amountOut);
+
+// Then transfer tokens
+ITIP20(validatorToken).systemTransferFrom(msg.sender, address(this), amountIn);
+IERC20(userToken).transfer(to, amountOut);
+```
+
+See `FeeAMM.sol:117-122`.
+
+### Permanent Liquidity Lock
+
+The first LP permanently locks `MIN_LIQUIDITY = 1,000` LP tokens, preventing:
+
+- Complete drainage of the pool
+- Precision loss attacks
+- Division by zero in share calculations
+
+See `FeeAMM.sol:15` and `FeeAMM.sol:153-154`.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Stablecoin Fees" icon="dollar-sign" href="/protocol/fees/stablecoin-fees">
+    Learn how to pay gas fees in USD stablecoins
+  </Card>
+  <Card title="Gas Pricing" icon="gauge-high" href="/protocol/fees/gas-pricing">
+    Understand attodollar denomination and cost calculations
+  </Card>
+  <Card title="Fee System Overview" icon="circle-info" href="/protocol/fees/overview">
+    High-level overview of Tempo's fee system
+  </Card>
+</CardGroup>

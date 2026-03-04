@@ -1,0 +1,188 @@
+---
+title: Standard Ethereum Methods
+description: Standard Ethereum JSON-RPC methods supported by Tempo
+---
+
+Tempo implements the standard Ethereum JSON-RPC API, providing compatibility with existing Ethereum tooling and libraries.
+
+## Supported Methods
+
+Tempo supports the full Ethereum JSON-RPC specification including:
+
+### Account Methods
+
+- `eth_getBalance` - Returns the balance placeholder (use TIP-20 contracts for actual balances)
+- `eth_getCode` - Returns the code at a given address
+- `eth_getStorageAt` - Returns the value from a storage position
+- `eth_getTransactionCount` - Returns the number of transactions sent from an address
+
+### Block Methods
+
+- `eth_blockNumber` - Returns the current block number
+- `eth_getBlockByHash` - Returns information about a block by hash
+- `eth_getBlockByNumber` - Returns information about a block by number
+- `eth_getBlockTransactionCountByHash` - Returns the number of transactions in a block
+- `eth_getBlockTransactionCountByNumber` - Returns the number of transactions in a block
+- `eth_getBlockReceipts` - Returns all transaction receipts for a block
+
+### Transaction Methods
+
+- `eth_sendRawTransaction` - Submits a signed transaction
+- `eth_sendTransaction` - Signs and sends a transaction (requires unlocked account)
+- `eth_getTransactionByHash` - Returns transaction details by hash
+- `eth_getTransactionByBlockHashAndIndex` - Returns transaction by block hash and index
+- `eth_getTransactionByBlockNumberAndIndex` - Returns transaction by block number and index
+- `eth_getTransactionReceipt` - Returns the receipt of a transaction
+- `eth_call` - Executes a call without creating a transaction
+- `eth_estimateGas` - Estimates gas needed for a transaction
+
+### State Methods
+
+- `eth_getLogs` - Returns logs matching a filter
+- `eth_getProof` - Returns the Merkle proof for account and storage values
+
+### Gas and Fee Methods
+
+- `eth_gasPrice` - Returns the current gas price (returns 0 on Tempo)
+- `eth_maxPriorityFeePerGas` - Returns the current max priority fee per gas
+- `eth_feeHistory` - Returns historical gas fee data
+
+### Network Methods
+
+- `eth_chainId` - Returns the chain ID
+- `eth_syncing` - Returns sync status
+- `net_version` - Returns the network ID
+- `net_listening` - Returns true if the node is listening for connections
+- `net_peerCount` - Returns the number of connected peers
+
+### Utility Methods
+
+- `web3_clientVersion` - Returns the client version
+- `web3_sha3` - Returns Keccak-256 hash of data
+
+## Tempo-Specific Behavior
+
+### eth_getBalance
+
+Returns a placeholder value since Tempo uses TIP-20 tokens instead of native currency:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x4242424242424242424242424242424242424242424242424242424242424242424242424242"
+}
+```
+
+To query actual token balances, use the TIP-20 contract `balanceOf` method.
+
+### eth_gasPrice
+
+Returns `0` because Tempo uses a fixed base fee model:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x0"
+}
+```
+
+Use `eth_maxPriorityFeePerGas` to get the suggested priority fee.
+
+### eth_estimateGas
+
+Gas estimation accounts for:
+
+- Fee token balance (for AA transactions with custom fee tokens)
+- 2D nonce storage reads (for AA transactions with custom nonce keys)
+- Multi-call execution (for AA transactions with batched calls)
+
+For AA transactions, the estimate includes the overhead of:
+- Fee token transfers
+- Nonce management
+- Authorization verification
+
+### eth_sendRawTransaction
+
+<Note>
+Tempo supports both standard Ethereum transactions and Account Abstraction (AA) transactions.
+</Note>
+
+**Standard transactions** (Legacy, EIP-2930, EIP-1559, EIP-7702) are processed through the transaction pool and included in the next block.
+
+**Subblock transactions** are routed based on the `subblockProposer` field:
+- If the transaction targets this validator, it's forwarded to the subblocks service
+- If the transaction targets a different validator, it's rejected with: `"subblock transaction rejected: target validator mismatch"`
+- Only the target validator will accept the transaction
+
+### Transaction Receipts
+
+Tempo transaction receipts include additional fields:
+
+<ResponseField name="feeToken" type="address">
+  Address of the token used to pay transaction fees (null for free transactions)
+</ResponseField>
+
+<ResponseField name="feePayer" type="address">
+  Address that paid for the transaction (may differ from sender for AA transactions)
+</ResponseField>
+
+Example receipt:
+
+```json
+{
+  "blockHash": "0x1234...",
+  "blockNumber": "0x1",
+  "transactionHash": "0x5678...",
+  "transactionIndex": "0x0",
+  "from": "0xabcd...",
+  "to": "0xef01...",
+  "gasUsed": "0x5208",
+  "cumulativeGasUsed": "0x5208",
+  "effectiveGasPrice": "0x3b9aca00",
+  "status": "0x1",
+  "logs": [],
+  "feeToken": "0x1111...",
+  "feePayer": "0xabcd..."
+}
+```
+
+## Block Structure
+
+Tempo blocks include standard Ethereum fields plus Tempo-specific extensions:
+
+<ResponseField name="generalGasLimit" type="uint64">
+  Gas limit for general (non-payment) transactions
+</ResponseField>
+
+<ResponseField name="sharedGasLimit" type="uint64">
+  Gas limit for payment lane transactions (= blockGasLimit / 10)
+</ResponseField>
+
+<ResponseField name="timestampMillisPart" type="uint64">
+  Millisecond component of block timestamp (0-999)
+</ResponseField>
+
+The full block timestamp with millisecond precision is:
+```
+timestamp_ms = timestamp * 1000 + timestampMillisPart
+```
+
+## Unsupported Methods
+
+The following Ethereum methods are not supported on Tempo:
+
+- `eth_getUncleByBlockHashAndIndex` - Tempo has no uncle blocks
+- `eth_getUncleByBlockNumberAndIndex` - Tempo has no uncle blocks
+- `eth_getUncleCountByBlockHash` - Tempo has no uncle blocks
+- `eth_getUncleCountByBlockNumber` - Tempo has no uncle blocks
+- `eth_coinbase` - Block rewards use a different mechanism
+- `eth_mining` - Tempo uses a different consensus mechanism
+- `eth_hashrate` - Tempo uses a different consensus mechanism
+
+## Next Steps
+
+<Card title="Tempo-Specific Methods" icon="bolt" href="/api/tempo-methods">
+  Learn about Tempo's custom RPC methods and extensions
+</Card>

@@ -1,0 +1,80 @@
+---
+title: JSON-RPC API Overview
+description: Overview of Tempo's JSON-RPC API namespaces and methods
+---
+
+Tempo implements a JSON-RPC API that extends Ethereum's standard RPC interface with Tempo-specific functionality.
+
+## Available Namespaces
+
+Tempo's JSON-RPC API is organized into the following namespaces:
+
+### Standard Ethereum Namespaces
+
+- **`eth`** - Standard Ethereum JSON-RPC methods for querying blocks, transactions, state, and sending transactions
+- **`net`** - Network information methods
+- **`web3`** - Web3 client version and utilities
+
+### Tempo-Specific Namespaces
+
+- **`consensus`** - Query consensus state, finalization events, and network identity transitions
+- **`token`** - Query TIP-20 token data including balances, roles, and role history
+- **`admin`** - Administrative methods for node operators (validator key management)
+
+## Key Differences from Ethereum
+
+Tempo's RPC API maintains compatibility with Ethereum tooling while introducing several key differences:
+
+### Account Abstraction (AA) Transactions
+
+Tempo supports native account abstraction through a custom transaction type (`0x7f`). AA transactions include:
+
+- **Multi-call batching** - Execute multiple calls in a single transaction
+- **Fee tokens** - Pay gas fees in any TIP-20 token instead of native currency
+- **2D nonces** - Use custom nonce keys for parallel transaction submission
+- **Key authorization** - Delegate transaction signing to secondary keys
+- **Validity windows** - Time-bound transaction execution with `valid_before` and `valid_after`
+
+### Native Balance Placeholder
+
+Tempo uses TIP-20 tokens for all value transfers. `eth_getBalance` returns a placeholder value:
+
+```
+0x4242424242424242424242424242424242424242424242424242424242424242424242424242
+```
+
+Use the TIP-20 contract interface to query actual token balances.
+
+### Block Structure
+
+Tempo blocks include additional header fields:
+
+- `generalGasLimit` - Gas limit for non-payment transactions
+- `sharedGasLimit` - Gas limit for payment lane transactions  
+- `timestampMillisPart` - Millisecond precision for block timestamps
+
+### Subblock Transactions
+
+Tempo supports subblock transactions that target specific validators for ultra-low-latency execution. These transactions:
+
+- Must specify a `subblockProposer` (partial validator public key)
+- Are routed directly to the target validator
+- Execute in under 100ms latency
+- Only accepted by the target validator node
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Standard Methods" icon="ethereum" href="/api/standard-methods">
+    Ethereum-compatible JSON-RPC methods
+  </Card>
+  <Card title="Tempo Methods" icon="bolt" href="/api/tempo-methods">
+    Tempo-specific RPC methods and extensions
+  </Card>
+  <Card title="Admin Methods" icon="lock" href="/api/admin-methods">
+    Administrative RPC methods
+  </Card>
+  <Card title="Consensus API" icon="network-wired" href="/api/tempo-methods">
+    Query consensus state and events
+  </Card>
+</CardGroup>

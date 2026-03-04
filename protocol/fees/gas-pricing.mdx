@@ -1,0 +1,349 @@
+---
+title: Gas Pricing
+description: Attodollar-denominated gas pricing with predictable dollar costs
+---
+
+Tempo denominates gas prices in **attodollars** (10⁻¹⁸ USD), enabling precise economic accounting while maintaining human-readable dollar relationships. This approach ensures transaction costs remain predictable and aligned with real-world dollar values.
+
+## Economic Units
+
+Tempo uses two primary units for fee accounting:
+
+### Attodollars (aUSD)
+
+**Attodollars** are the base unit for gas pricing:
+
+- **Precision**: 10⁻¹⁸ USD (18 decimal places)
+- **Usage**: Gas price denomination (`baseFee` in attodollars per gas)
+- **Symbol**: aUSD
+
+The base fee is specified in attodollars per gas unit:
+
+```
+baseFee = 2,000 aUSD/gas = 2 × 10⁻¹⁵ USD/gas
+```
+
+### Microdollars (μUSD)
+
+**Microdollars** are the standard unit for TIP-20 token amounts:
+
+- **Precision**: 10⁻⁶ USD (6 decimal places)
+- **Usage**: TIP-20 token balances and transfers
+- **Symbol**: μUSD
+- **Equivalent**: 1 TIP-20 token unit = 1 microdollar = 0.000001 USD
+
+All TIP-20 stablecoins use 6 decimals, matching the USDC standard.
+
+### Conversion
+
+To convert between gas cost and TIP-20 token amounts:
+
+```
+fee_in_microdollars = (gas × baseFee_in_attodollars) / 10¹²
+```
+
+**Example:**
+- Gas consumed: 50,000 gas
+- Base fee: 2,000 aUSD/gas
+- Fee in attodollars: 50,000 × 2,000 = 100,000,000 aUSD = 10⁸ aUSD
+- Fee in microdollars: 10⁸ / 10¹² = **100 μUSD** = **0.0001 USD** = **0.01 cents**
+
+<Tip>
+**Quick conversion at target base fee (2,000 aUSD/gas):**
+
+- 50,000 gas = 100 μUSD = 0.0001 USD = 0.01 cents
+- 500,000 gas = 1,000 μUSD = 0.001 USD = 0.1 cents  
+- 5,000,000 gas = 10,000 μUSD = 0.01 USD = 1 cent
+
+Rule of thumb: **1 cent per 500,000 gas** at target base fee.
+</Tip>
+
+## Base Fee Mechanism
+
+Tempo uses an **EIP-1559-style dynamic base fee** that adjusts based on block utilization. Unlike Ethereum, the base fee is denominated in attodollars rather than a native token.
+
+### Target Utilization
+
+The protocol targets **50% block utilization**:
+
+- **Block gas limit**: 30,000,000 gas
+- **Target gas per block**: 15,000,000 gas
+
+When blocks consistently exceed the target, the base fee increases. When blocks fall below the target, the base fee decreases.
+
+### Adjustment Formula
+
+The base fee adjusts each block using:
+
+```
+baseFee_next = baseFee_current × (1 + adjustment)
+
+where:
+  adjustment = (gasUsed - gasTarget) / gasTarget × 1/8
+```
+
+This results in:
+
+- **Full blocks (100% usage)**: Base fee increases by ~6.25% per block
+- **Target blocks (50% usage)**: Base fee remains constant
+- **Empty blocks (0% usage)**: Base fee decreases by 6.25% per block
+
+### Base Fee Floor
+
+The base fee has a **minimum floor** to prevent spam attacks:
+
+```
+MIN_BASE_FEE = 1,000 aUSD/gas = 1 × 10⁻¹⁵ USD/gas
+```
+
+At this floor, a simple TIP-20 transfer (50,000 gas) costs:
+
+```
+fee = 50,000 gas × 1,000 aUSD/gas / 10¹² = 50 μUSD = 0.00005 USD
+```
+
+This minimum ensures that even under zero network load, transaction costs remain high enough to deter spam.
+
+<Info>
+The base fee floor provides a critical security property: creating 1 TB of state costs at least **$25 million** (at floor prices), making large-scale spam attacks economically infeasible.
+</Info>
+
+## Transaction Cost Examples
+
+Assuming the target base fee of **2,000 aUSD/gas**:
+
+### TIP-20 Transfer (Existing Address)
+
+```
+Operation:      transfer(recipient, amount)
+Gas used:       50,000 gas
+Base fee:       2,000 aUSD/gas
+Total cost:     50,000 × 2,000 / 10¹² = 100 μUSD
+USD cost:       $0.0001 (0.01 cents)
+```
+
+This includes:
+- Base transaction cost: 21,000 gas
+- TIP-20 operation: 24,000 gas
+- Storage update (existing slot): 5,000 gas
+
+### TIP-20 Transfer (New Address)
+
+```
+Operation:      transfer(newRecipient, amount)
+Gas used:       300,000 gas
+Base fee:       2,000 aUSD/gas
+Total cost:     300,000 × 2,000 / 10¹² = 600 μUSD
+USD cost:       $0.0006 (0.06 cents)
+```
+
+The higher cost comes from:
+- Base operations: 50,000 gas
+- **New storage slot (balance)**: 250,000 gas
+
+<Note>
+Transferring to a new address does **not** charge the account creation fee (250,000 gas). That fee only applies when the recipient first **uses** their account (sends a transaction). See [State Creation Costs](#state-creation-costs) below.
+</Note>
+
+### First Transaction from New Account
+
+```
+Operation:      transfer() from new account (nonce 0→1)
+Gas used:       300,000 gas
+Base fee:       2,000 aUSD/gas
+Total cost:     300,000 × 2,000 / 10¹² = 600 μUSD
+USD cost:       $0.0006 (0.06 cents)
+```
+
+This includes:
+- Transfer operation: 50,000 gas
+- **Account creation (nonce write)**: 250,000 gas
+
+Combined with the initial transfer **to** the address (0.06 cents), the total onboarding cost for a new user is approximately **0.12 cents**.
+
+### Contract Deployment
+
+```
+Operation:      CREATE with 1 KB (1,000 bytes) of code
+Gas used:       1,750,000 gas
+Base fee:       2,000 aUSD/gas
+Total cost:     1,750,000 × 2,000 / 10¹² = 3,500 μUSD
+USD cost:       $0.0035 (0.35 cents)
+```
+
+Breakdown:
+- **Account creation**: 250,000 gas
+- **Contract code**: 1,000 bytes × 1,000 gas/byte = 1,000,000 gas
+- **Contract metadata** (keccak + codesize): 500,000 gas
+
+## State Creation Costs
+
+Tempo significantly increases the cost of state-creating operations to protect against adversarial state growth. These costs are defined in [TIP-1000](/protocol/tips/tip-1000).
+
+### New Storage Slot
+
+**Operation**: SSTORE from zero to non-zero value
+
+```
+Gas cost:       250,000 gas
+Dollar cost:    250,000 × 2,000 / 10¹² = 500 μUSD = $0.0005
+```
+
+**Why**: At Tempo's target throughput (20,000 TPS), an adversary could create 120 TB of state per year at the standard EVM cost (20,000 gas). The increased cost raises this to **$50 million per TB**, making spam attacks economically infeasible.
+
+### Account Creation
+
+**Operation**: First transaction from an address (nonce 0→1)
+
+```
+Gas cost:       250,000 gas
+Dollar cost:    $0.0005 (0.05 cents)
+```
+
+**Why**: Prevents mass account creation attacks. Creating 10 million accounts would cost approximately **$5,000**.
+
+### Contract Code Storage
+
+**Per-byte cost**:
+```
+Gas cost:       1,000 gas/byte (up from 200 gas/byte in standard EVM)
+Dollar cost:    1,000 × 2,000 / 10¹² = 2 μUSD = $0.000002 per byte
+```
+
+**Contract creation overhead**:
+```
+Gas cost:       500,000 gas (for keccak hash + codesize fields)
+Dollar cost:    $0.001 (0.1 cents)
+```
+
+**Total formula**:
+```
+contractCreationGas = accountCreation + (codeSize × 1,000) + 500,000
+                    = 250,000 + (codeSize × 1,000) + 500,000
+                    = 750,000 + (codeSize × 1,000)
+```
+
+**Example (10 KB contract)**:
+```
+Code size:      10,000 bytes
+Gas cost:       750,000 + (10,000 × 1,000) = 10,750,000 gas
+Dollar cost:    10,750,000 × 2,000 / 10¹² = 21,500 μUSD = $0.0215
+```
+
+### Attack Cost Analysis
+
+At the target base fee (2,000 aUSD/gas):
+
+| State Size | Cost to Create |
+|-----------|----------------|
+| 1 GB | $50,000 |
+| 10 GB | $500,000 |
+| 100 GB | $5,000,000 |
+| 1 TB | $50,000,000 |
+| 10 TB | $500,000,000 |
+
+These costs assume ~100 bytes per state element (1 TB ≈ 10 billion state elements × 250,000 gas each).
+
+<Warning>
+At the base fee floor (1,000 aUSD/gas), the costs are halved but remain prohibitively expensive for spam attacks:
+- 1 TB of state: **$25 million**
+- 10 TB of state: **$250 million**
+</Warning>
+
+## Gas Limit
+
+Tempo increases the per-transaction gas limit to accommodate large contract deployments:
+
+```
+MAX_TX_GAS = 30,000,000 gas (up from 16,000,000 in standard EVM)
+```
+
+This allows deployment of **24 KB contracts**:
+
+```
+maxCodeSize = (30,000,000 - 750,000) / 1,000 = 29,250 bytes ≈ 28.5 KB
+```
+
+In practice, the limit accommodates the largest EVM contracts with margin for initialization logic.
+
+## Priority Fees
+
+Tempo does **not currently support priority fees** (tips to validators). All fees are calculated using the base fee only:
+
+```
+totalFee = gasUsed × baseFee
+```
+
+Future protocol versions may introduce priority fees for block inclusion preferences.
+
+## Economic Stability
+
+The attodollar denomination provides several advantages:
+
+### Predictable Costs
+
+Developers can reason about transaction costs in dollar terms without tracking volatile token prices:
+
+```typescript
+// Calculate fee in dollars directly
+const gasUsed = 50_000;
+const baseFeeInAttodollars = 2_000n;
+const feeInDollars = Number(gasUsed * baseFeeInAttodollars) / 1e18;
+
+console.log(`Fee: $${feeInDollars.toFixed(6)}`); // Fee: $0.000100
+```
+
+### Stable Fee Markets
+
+Because stablecoins maintain a fixed dollar value, base fee adjustments directly reflect network congestion rather than token price volatility.
+
+### Cross-Token Compatibility
+
+All USD-denominated TIP-20 tokens share the same economic model. A transaction costing 100 μUSD costs the same whether paid in pathUSD, USDC, USDT, or any other USD stablecoin (before AMM conversion fees).
+
+## Reference: Gas Costs
+
+### Base Operations
+
+| Operation | Gas Cost |
+|-----------|----------|
+| Base transaction | 21,000 |
+| TIP-20 transfer operation | ~24,000 |
+| TIP-20 approval | ~46,000 |
+| Contract call (simple) | ~25,000 |
+
+### State Operations
+
+| Operation | Gas Cost |
+|-----------|----------|
+| SSTORE (existing slot, non-zero → non-zero) | 5,000 |
+| SSTORE (existing slot, non-zero → zero) | -15,000 (refund) |
+| SSTORE (new slot, zero → non-zero) | **250,000** |
+| Account creation (first nonce write) | **250,000** |
+| Contract code (per byte) | **1,000** |
+| Contract creation overhead | **500,000** |
+
+### TIP-20 Operations
+
+| Operation | Gas Cost (approx) |
+|-----------|-------------------|
+| transfer (existing address) | 50,000 |
+| transfer (new address) | 300,000 |
+| transferFrom (existing) | 55,000 |
+| approve | 46,000 |
+| mint (new balance) | 275,000 |
+| burn | 25,000 |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fee AMM" icon="arrows-rotate" href="/protocol/fees/fee-amm">
+    Learn how automatic stablecoin conversion works
+  </Card>
+  <Card title="Stablecoin Fees" icon="dollar-sign" href="/protocol/fees/stablecoin-fees">
+    Guide to paying gas in USD stablecoins
+  </Card>
+  <Card title="TIP-1000 Specification" icon="file-lines" href="/protocol/tips/tip-1000">
+    Full specification of state creation cost increases
+  </Card>
+</CardGroup>

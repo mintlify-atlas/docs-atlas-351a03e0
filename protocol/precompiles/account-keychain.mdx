@@ -1,0 +1,540 @@
+---
+title: Account Keychain Precompile
+description: Multi-key authorization with spending limits for smart accounts
+---
+
+The Account Keychain precompile enables accounts to authorize secondary keys (Access Keys) that can sign transactions with scoped permissions. This provides native session key functionality at the protocol level.
+
+## Address
+
+```
+0xAAAAAAAA00000000000000000000000000000000
+```
+
+## Overview
+
+Account Keychain allows accounts to:
+
+- Authorize multiple secondary keys (Access Keys) for signing transactions
+- Set expiry timestamps for each key
+- Define per-token spending limits that deplete as keys spend
+- Revoke keys to prevent replay attacks
+- Support multiple signature types (secp256k1, P256, WebAuthn)
+
+Only the **Root Key** (the account's main key) can manage Access Keys. This restriction is enforced by the protocol during transaction validation.
+
+## Interface
+
+```solidity
+interface IAccountKeychain {
+    enum SignatureType {
+        Secp256k1,  // Standard Ethereum signatures
+        P256,       // NIST P-256 (available T1C+)
+        WebAuthn    // WebAuthn/passkey signatures
+    }
+    
+    struct TokenLimit {
+        address token;   // TIP-20 token address
+        uint256 amount;  // Spending limit
+    }
+    
+    struct KeyInfo {
+        SignatureType signatureType;
+        address keyId;
+        uint64 expiry;
+        bool enforceLimits;
+        bool isRevoked;
+    }
+    
+    // Management functions (Root Key only)
+    function authorizeKey(
+        address keyId,
+        SignatureType signatureType,
+        uint64 expiry,
+        bool enforceLimits,
+        TokenLimit[] calldata limits
+    ) external;
+    
+    function revokeKey(address keyId) external;
+    
+    function updateSpendingLimit(
+        address keyId,
+        address token,
+        uint256 newLimit
+    ) external;
+    
+    // View functions
+    function getKey(address account, address keyId) 
+        external view returns (KeyInfo memory);
+    
+    function getRemainingLimit(
+        address account,
+        address keyId,
+        address token
+    ) external view returns (uint256);
+    
+    function getTransactionKey() external view returns (address);
+}
+```
+
+### Events
+
+```solidity
+event KeyAuthorized(
+    address indexed account,
+    address indexed publicKey,
+    uint8 signatureType,
+    uint64 expiry
+);
+
+event KeyRevoked(
+    address indexed account,
+    address indexed publicKey
+);
+
+event SpendingLimitUpdated(
+    address indexed account,
+    address indexed publicKey,
+    address indexed token,
+    uint256 newLimit
+);
+```
+
+### Errors
+
+```solidity
+error KeyAlreadyExists();
+error KeyNotFound();
+error KeyInactive();
+error KeyExpired();
+error KeyAlreadyRevoked();
+error SpendingLimitExceeded();
+error InvalidSignatureType();
+error ZeroPublicKey();
+error ExpiryInPast();
+error UnauthorizedCaller();
+```
+
+## Root Key vs Access Key
+
+### Root Key
+
+The Root Key is the account's main key (the one that created the account):
+
+- Can authorize and revoke Access Keys
+- Can update spending limits
+- Has unlimited spending power
+- Stored as `address(0)` in transaction context
+
+### Access Key
+
+Access Keys are secondary keys with limited permissions:
+
+- Can sign transactions on behalf of the account
+- Subject to expiry timestamps
+- Subject to spending limits (if `enforceLimits = true`)
+- Cannot manage other keys
+
+## Authorization Flow
+
+```
+1. Root Key authorizes Access Key
+   └─> Set expiry, limits, signature type
+   
+2. User signs transaction with Access Key
+   └─> Protocol validates key and sets transaction_key in precompile
+   
+3. Transaction executes
+   └─> TIP-20 transfers call precompile to check/update limits
+   
+4. Root Key can revoke at any time
+   └─> Key becomes permanently unusable
+```
+
+## Usage Examples
+
+### Authorizing a Key
+
+```solidity
+contract MyAccount {
+    IAccountKeychain constant KEYCHAIN = 
+        IAccountKeychain(0xAAAAAAAA00000000000000000000000000000000);
+    
+    function authorizeSessionKey(
+        address sessionKey,
+        address usdcToken
+    ) external {
+        // Must be called by Root Key
+        IAccountKeychain.TokenLimit[] memory limits = 
+            new IAccountKeychain.TokenLimit[](1);
+        limits[0] = IAccountKeychain.TokenLimit({
+            token: usdcToken,
+            amount: 1000e6  // 1000 USDC
+        });
+        
+        KEYCHAIN.authorizeKey(
+            sessionKey,
+            IAccountKeychain.SignatureType.Secp256k1,
+            uint64(block.timestamp + 7 days),
+            true,  // enforceLimits
+            limits
+        );
+    }
+}
+```
+
+### Using an Access Key
+
+```typescript
+import { createWalletClient, http } from 'viem'
+
+const rootKey = privateKeyToAccount('0x...')
+const accessKey = privateKeyToAccount('0x...')
+
+// 1. Root Key authorizes Access Key
+await authorizeKey(rootKey, {
+  keyId: accessKey.address,
+  signatureType: 0, // Secp256k1
+  expiry: Date.now() / 1000 + 86400, // 24 hours
+  enforceLimits: true,
+  limits: [{ token: USDC, amount: 100e6 }]
+})
+
+// 2. Access Key can now sign transactions
+const client = createWalletClient({
+  account: accessKey,
+  chain: tempo,
+  transport: http()
+})
+
+// This transfer is authorized by Access Key
+// Spending limit is checked and updated
+await transfer(client, {
+  token: USDC,
+  to: merchant,
+  amount: 50e6  // 50 USDC
+})
+```
+
+### Checking Remaining Limits
+
+```solidity
+function checkLimit(address account, address key, address token) 
+    public view returns (uint256) 
+{
+    return KEYCHAIN.getRemainingLimit(account, key, token);
+}
+```
+
+### Revoking a Key
+
+```solidity
+function revokeSessionKey(address sessionKey) external {
+    // Must be called by Root Key
+    KEYCHAIN.revokeKey(sessionKey);
+    // Key is now permanently revoked and cannot be re-authorized
+}
+```
+
+## Spending Limits
+
+### How Limits Work
+
+1. **Authorization**: Root Key sets initial limits when authorizing key
+2. **Depletion**: Each transfer deducts from remaining limit
+3. **Per-Token**: Each token has independent limit
+4. **Per-Transaction**: Limits checked at transaction origin only
+
+### Limit Enforcement
+
+Spending limits are enforced during TIP-20 token operations:
+
+```rust
+// Called by TIP-20 transfer()
+keychain.authorize_transfer(msg.sender, token, amount)
+
+// Called by TIP-20 approve()
+keychain.authorize_approve(msg.sender, token, old_approval, new_approval)
+```
+
+<Warning>
+  Spending limits only apply when `msg.sender == tx.origin`. 
+  If a contract calls `transfer()`, the limit is not checked 
+  (the contract is spending its own tokens, not the user's).
+</Warning>
+
+### Approval Limits
+
+Approvals consume spending limits based on the **increase** in allowance:
+
+```solidity
+// Initial: allowance = 0, limit = 100
+approve(spender, 30);  // limit = 70 (consumed 30)
+approve(spender, 50);  // limit = 50 (consumed 20 more)
+approve(spender, 20);  // limit = 50 (decreased, no consumption)
+```
+
+### Unlimited Keys
+
+Keys with `enforceLimits = false` have no spending restrictions:
+
+```solidity
+KEYCHAIN.authorizeKey(
+    sessionKey,
+    SignatureType.Secp256k1,
+    expiry,
+    false,  // enforceLimits = false
+    []      // no limits needed
+);
+```
+
+## Signature Types
+
+### Secp256k1 (Type 0)
+
+Standard Ethereum signatures:
+
+```typescript
+const signature = await account.signMessage({ message: hash })
+```
+
+### P256 (Type 1, T1C+)
+
+NIST P-256 signatures for secure enclaves:
+
+```typescript
+// Available starting from T1C hardfork
+const p256Key = await crypto.subtle.generateKey(
+  { name: 'ECDSA', namedCurve: 'P-256' },
+  true,
+  ['sign', 'verify']
+)
+```
+
+### WebAuthn (Type 2)
+
+Passkey/biometric signatures:
+
+```typescript
+const credential = await navigator.credentials.create({
+  publicKey: {
+    challenge: new Uint8Array(32),
+    rp: { name: 'My App' },
+    user: { id: userId, name: userName, displayName: userName },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }]
+  }
+})
+```
+
+## Replay Protection
+
+Revoked keys cannot be re-authorized:
+
+```solidity
+// 1. Authorize key
+authorizeKey(key1, ...);
+
+// 2. Revoke key
+revokeKey(key1);
+
+// 3. Try to re-authorize - FAILS
+authorizeKey(key1, ...);  // Reverts with KeyAlreadyRevoked
+```
+
+This prevents replay attacks where an old authorization signature could be reused.
+
+## Gas Costs
+
+| Operation | Cold | Warm |
+|-----------|------|------|
+| `authorizeKey` | ~90,000 gas | ~45,000 gas |
+| `revokeKey` | ~30,000 gas | ~15,000 gas |
+| `updateSpendingLimit` | ~30,000 gas | ~15,000 gas |
+| `getKey` | ~3,000 gas | ~400 gas |
+| `getRemainingLimit` | ~2,500 gas | ~300 gas |
+| Spending limit check | ~6,000 gas | ~2,000 gas |
+
+## Storage Layout
+
+```solidity
+// Slot 0: keys[account][keyId] -> AuthorizedKey (packed)
+// Packed fields: signature_type (1 byte) + expiry (8 bytes) + 
+//                enforce_limits (1 byte) + is_revoked (1 byte)
+mapping(address => mapping(address => AuthorizedKey)) keys;
+
+// Slot 1: spendingLimits[hash(account,keyId)][token] -> amount
+mapping(bytes32 => mapping(address => uint256)) spending_limits;
+
+// Transient storage (cleared after transaction)
+address transaction_key;  // Key used in current transaction
+address tx_origin;        // Transaction origin
+```
+
+AuthorizedKey is packed into a single storage slot for gas efficiency.
+
+## Protocol Integration
+
+### Transaction Validation
+
+The protocol calls the precompile during transaction validation:
+
+```rust
+// 1. Determine which key signed the transaction
+let key_id = extract_key_from_signature(&tx);
+
+// 2. Set transaction key in precompile
+keychain.set_transaction_key(key_id)?;
+keychain.set_tx_origin(tx.origin)?;
+
+// 3. Validate key authorization
+if key_id != Address::ZERO {
+    keychain.validate_keychain_authorization(
+        tx.sender,
+        key_id,
+        current_timestamp,
+        signature_type
+    )?;
+}
+
+// 4. Execute transaction
+// (spending limits checked during TIP-20 transfers)
+```
+
+### Transient Storage
+
+The `transaction_key` is stored in transient storage (EIP-1153) and automatically cleared after transaction execution:
+
+```rust
+pub fn set_transaction_key(&mut self, key_id: Address) -> Result<()> {
+    self.transaction_key.t_write(key_id)  // Transient write
+}
+```
+
+This ensures keys don't leak between transactions.
+
+## Best Practices
+
+### Key Expiry
+
+```solidity
+// ✅ Good: Short-lived session keys
+expiry: block.timestamp + 1 days
+
+// ❌ Bad: Very long expiry (use revocation instead)
+expiry: block.timestamp + 365 days
+
+// ✅ Good: Never expires (use type(uint64).max)
+expiry: type(uint64).max
+```
+
+### Spending Limits
+
+```solidity
+// ✅ Good: Per-token limits
+limits: [
+    { token: USDC, amount: 1000e6 },
+    { token: USDT, amount: 1000e6 }
+]
+
+// ❌ Bad: Single token with huge limit
+limits: [{ token: USDC, amount: 1000000e6 }]
+
+// ✅ Good: Unlimited for trusted keys
+enforceLimits: false
+```
+
+### Key Management
+
+```typescript
+// Store key metadata off-chain
+interface KeyMetadata {
+  keyId: Address
+  purpose: string  // "trading", "gaming", etc
+  createdAt: number
+  expiresAt: number
+}
+
+// Periodically cleanup expired keys
+async function cleanupExpiredKeys() {
+  const keys = await getAuthorizedKeys(account)
+  const now = Date.now() / 1000
+  
+  for (const key of keys) {
+    if (key.expiry < now && !key.isRevoked) {
+      await revokeKey(key.keyId)
+    }
+  }
+}
+```
+
+## Security Considerations
+
+- **Root Key Protection**: Root key has full control; compromise = full account compromise
+- **Key Expiry**: Always set expiry; use revocation for immediate invalidation
+- **Spending Limits**: Set conservative limits; monitor usage
+- **Contract Calls**: Spending limits don't apply to contract-initiated transfers
+- **Replay Protection**: Revoked keys cannot be re-authorized (prevents replay)
+
+## Use Cases
+
+### Gaming Session Keys
+
+```typescript
+// Authorize gaming key with token limits
+await authorizeKey(rootKey, {
+  keyId: gamingKey,
+  expiry: Date.now() / 1000 + 3600, // 1 hour
+  limits: [{ token: GAME_TOKEN, amount: 100e18 }]
+})
+
+// Gaming client uses session key
+while (playing) {
+  await buyItem(gamingKey, itemId)
+}
+```
+
+### Mobile Wallet
+
+```typescript
+// Authorize mobile key with daily spending limit
+await authorizeKey(rootKey, {
+  keyId: mobileKey,
+  expiry: Math.floor(Date.now() / 1000) + 86400 * 30, // 30 days
+  limits: [
+    { token: USDC, amount: 500e6 },  // $500/day USDC
+    { token: USDT, amount: 500e6 }   // $500/day USDT
+  ]
+})
+
+// Reset daily by updating limit
+setInterval(async () => {
+  await updateSpendingLimit(rootKey, mobileKey, USDC, 500e6)
+  await updateSpendingLimit(rootKey, mobileKey, USDT, 500e6)
+}, 86400 * 1000)
+```
+
+### Hardware Wallet + Hot Key
+
+```typescript
+// Hardware wallet = Root Key (cold storage)
+// Hot key = Access Key (daily operations)
+
+await authorizeKey(hardwareWallet, {
+  keyId: hotKey,
+  expiry: type(uint64).max,  // Never expires
+  limits: [{ token: USDC, amount: 10000e6 }]  // $10k limit
+})
+
+// Hot key handles daily operations
+await transfer(hotKey, { ... })
+
+// Hardware wallet for large transfers
+await transfer(hardwareWallet, { ... })  // Unlimited
+```
+
+## See Also
+
+- [Account Abstraction](/concepts/tempo-transactions)
+- [Nonce Manager Precompile](/protocol/precompiles/nonce)
+- [TIP-20 Token Standard](/protocol/tip20/overview)
+- [Transaction Signing](/protocol/transactions/tempo-transaction)

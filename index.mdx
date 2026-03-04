@@ -1,97 +1,255 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Tempo Documentation"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white py-20">
+  <div className="max-w-7xl mx-auto px-6 lg:px-8">
+    <div className="grid lg:grid-cols-12 gap-12 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-5xl lg:text-6xl font-bold dark:text-gray-100 text-gray-900 mb-6">
+          The blockchain for payments
+        </h1>
+        <p className="text-xl dark:text-gray-400 text-gray-600 max-w-2xl mb-8">
+          Build high-performance payment applications with sub-millidollar fees, native stablecoin support, and EVM compatibility.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a
+            href="/quickstart"
+            className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#040404] rounded-lg hover:bg-[#1a1a1a] transition-colors"
+          >
+            Get Started
+          </a>
+          <a
+            href="/introduction"
+            className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold dark:text-gray-100 text-gray-900 dark:bg-white/10 bg-gray-100 dark:border-white/30 border-gray-300 border rounded-lg dark:hover:bg-white/20 hover:bg-gray-200 transition-colors"
+          >
+            Learn More
+          </a>
+        </div>
+      </div>
+      <div className="lg:col-span-5 hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-br from-[#040404]/20 to-transparent rounded-2xl" />
+          <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-2xl p-8">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
+                <span className="dark:text-gray-300 text-gray-700 font-mono text-sm">Network Status: Active</span>
+              </div>
+              <div className="dark:bg-[#0f1117] bg-white rounded-lg p-4 dark:border-[#27272a] border-gray-200 border">
+                <div className="text-xs dark:text-gray-500 text-gray-500 mb-1">Transaction Fee</div>
+                <div className="text-2xl font-bold dark:text-gray-100 text-gray-900">&lt; $0.001</div>
+              </div>
+              <div className="dark:bg-[#0f1117] bg-white rounded-lg p-4 dark:border-[#27272a] border-gray-200 border">
+                <div className="text-xs dark:text-gray-500 text-gray-500 mb-1">Finality</div>
+                <div className="text-2xl font-bold dark:text-gray-100 text-gray-900">&lt; 1 second</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-semibold dark:text-gray-100 text-gray-900 mb-3">
+      Quick Start
+    </h2>
+    <p className="text-base dark:text-gray-400 text-gray-600">
+      Get started with Tempo in minutes
+    </p>
+  </div>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+  <Steps>
+    <Step title="Connect to Tempo Testnet">
+      Add the Tempo testnet to your wallet or development environment.
 
-## Make it yours
+      ```bash
+      # Network details
+      Chain ID: 42431
+      RPC URL: https://rpc.moderato.tempo.xyz
+      Currency: USD
+      ```
+    </Step>
+    <Step title="Get testnet tokens">
+      Fund your address with testnet stablecoins using the faucet.
 
-Design a docs site that looks great and empowers your users.
+      ```bash
+      cast rpc tempo_fundAddress <YOUR_ADDRESS> --rpc-url https://rpc.moderato.tempo.xyz
+      ```
+    </Step>
+    <Step title="Make your first transaction">
+      Send a TIP-20 token transfer with a memo.
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
+      ```typescript
+      import { createTempoClient } from '@tempoxyz/sdk';
+
+      const client = createTempoClient({
+        transport: http('https://rpc.moderato.tempo.xyz')
+      });
+
+      const hash = await client.transferWithMemo({
+        token: '0x...',
+        to: '0x...',
+        amount: parseUnits('10', 6),
+        memo: 'Payment #12345'
+      });
+      ```
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-semibold dark:text-gray-100 text-gray-900 mb-3">
+      Explore by Topic
+    </h2>
+    <p className="text-base dark:text-gray-400 text-gray-600">
+      Learn about Tempo's core features and capabilities
+    </p>
+  </div>
+
+  <CardGroup cols={2}>
     <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+      title="TIP-20 Token Standard"
+      icon="coins"
+      href="/protocol/tip20/overview"
+    >
+      Native stablecoin transfers with memos, compliance policies, and dedicated payment lanes.
+    </Card>
+    <Card
+      title="Tempo Transactions"
+      icon="bolt"
+      href="/concepts/tempo-transactions"
+    >
+      Batch payments, fee sponsorship, scheduled transfers, and passkey authentication.
+    </Card>
+    <Card
+      title="Run a Node"
+      icon="server"
+      href="/node/installation"
+    >
+      Deploy and operate a Tempo validator or full node with Reth and Commonware.
+    </Card>
+    <Card
+      title="Build with SDKs"
+      icon="code"
+      href="/sdk/overview"
+    >
+      TypeScript, Rust, Go, and Foundry SDKs for building payment applications.
+    </Card>
+  </CardGroup>
+</div>
 
-## Create beautiful pages
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-semibold dark:text-gray-100 text-gray-900 mb-3">
+      Key Features
+    </h2>
+    <p className="text-base dark:text-gray-400 text-gray-600">
+      Why developers choose Tempo for payment infrastructure
+    </p>
+  </div>
 
-Everything you need to create world-class documentation.
+  <div className="grid md:grid-cols-2 gap-6">
+    <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 dark:bg-[#040404] bg-gray-900 rounded-lg flex items-center justify-center">
+          <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">
+            Sub-millidollar Fees
+          </h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600">
+            Pay gas in stablecoins with target fees under $0.001 per TIP-20 transfer.
+          </p>
+        </div>
+      </div>
+    </div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+    <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 dark:bg-[#040404] bg-gray-900 rounded-lg flex items-center justify-center">
+          <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">
+            Fast Finality
+          </h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600">
+            Sub-second finality with Simplex Consensus ensures rapid payment settlement.
+          </p>
+        </div>
+      </div>
+    </div>
 
-## Need inspiration?
+    <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 dark:bg-[#040404] bg-gray-900 rounded-lg flex items-center justify-center">
+          <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">
+            Built-in Compliance
+          </h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600">
+            TIP-403 policy registry enables shared compliance rules across multiple tokens.
+          </p>
+        </div>
+      </div>
+    </div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-xl p-6">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 dark:bg-[#040404] bg-gray-900 rounded-lg flex items-center justify-center">
+          <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">
+            EVM Compatible
+          </h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600">
+            Deploy Solidity contracts using familiar tools like Foundry, Hardhat, and Remix.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border rounded-2xl p-8 lg:p-12 text-center">
+    <h2 className="text-3xl font-semibold dark:text-gray-100 text-gray-900 mb-4">
+      Ready to build on Tempo?
+    </h2>
+    <p className="text-lg dark:text-gray-400 text-gray-600 max-w-2xl mx-auto mb-8">
+      Start building payment applications with predictable fees, fast finality, and native stablecoin support.
+    </p>
+    <div className="flex flex-wrap gap-4 justify-center">
+      <a
+        href="/quickstart"
+        className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#040404] rounded-lg hover:bg-[#1a1a1a] transition-colors"
+      >
+        Start Building
+      </a>
+      <a
+        href="https://github.com/tempoxyz/tempo"
+        className="inline-flex items-center justify-center px-6 py-3 text-base font-semibold dark:text-gray-100 text-gray-900 dark:bg-white/10 bg-gray-100 dark:border-white/30 border-gray-300 border rounded-lg dark:hover:bg-white/20 hover:bg-gray-200 transition-colors"
+      >
+        View on GitHub
+      </a>
+    </div>
+  </div>
+</div>

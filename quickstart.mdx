@@ -1,80 +1,366 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Connect to Tempo testnet and make your first transaction in 5 minutes
 ---
 
-## Get started in three steps
+This guide will walk you through connecting to the Tempo testnet, getting testnet tokens, and making your first TIP-20 transfer.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Choose your preferred method:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+<Tabs>
+  <Tab title="Command Line (cast)">
+    Install [Foundry](https://book.getfoundry.sh/getting-started/installation):
+    ```bash
+    curl -L https://foundry.paradigm.xyz | bash
+    foundryup
+    ```
+  </Tab>
+  <Tab title="TypeScript SDK">
+    You'll need Node.js 18+ and npm/yarn/pnpm installed.
+  </Tab>
+</Tabs>
+
+## Step 1: Connect to testnet
+
+<Note>
+Tempo testnet is called **Moderato**. It's a public network for testing and development.
+</Note>
+
+Testnet connection details:
+
+| Property | Value |
+| --- | --- |
+| **Network Name** | Tempo Testnet (Moderato) |
+| **Chain ID** | `42431` |
+| **Currency** | `USD` |
+| **RPC URL** | `https://rpc.moderato.tempo.xyz` |
+| **WebSocket** | `wss://rpc.moderato.tempo.xyz` |
+| **Block Explorer** | `https://explore.tempo.xyz` |
+
+### Verify connectivity
+
+Test that you can connect to the network:
+
+<Tabs>
+  <Tab title="Command Line">
+    ```bash
+    cast block-number --rpc-url https://rpc.moderato.tempo.xyz
+    ```
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    You should see the current block number.
+  </Tab>
+  <Tab title="TypeScript">
+    ```typescript
+    import { ProviderBuilder } from 'alloy';
+    import { TempoNetwork } from 'tempo-alloy';
+
+    const provider = await ProviderBuilder.new_with_network<TempoNetwork>()
+      .connect('https://rpc.moderato.tempo.xyz');
+
+    const blockNumber = await provider.getBlockNumber();
+    console.log(`Current block: ${blockNumber}`);
+    ```
+  </Tab>
+</Tabs>
+
+## Step 2: Get testnet tokens
+
+You'll need testnet stablecoins to pay for gas and test transfers. The faucet provides AlphaUSD tokens.
+
+<Warning>
+Testnet tokens have no real value. Don't send real funds to testnet addresses.
+</Warning>
+
+### Using the faucet RPC method
+
+The fastest way to get testnet tokens is via the `tempo_fundAddress` RPC method:
+
+<Tabs>
+  <Tab title="Command Line">
+    ```bash
+    # Replace <YOUR_ADDRESS> with your Ethereum address
+    cast rpc tempo_fundAddress "<YOUR_ADDRESS>" \
+      --rpc-url https://rpc.moderato.tempo.xyz
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    Example:
+    ```bash
+    cast rpc tempo_fundAddress "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb" \
+      --rpc-url https://rpc.moderato.tempo.xyz
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    This will send you testnet AlphaUSD tokens and return the transaction hash.
+  </Tab>
+  <Tab title="TypeScript">
+    ```typescript
+    import { ProviderBuilder } from 'alloy';
+    import { TempoNetwork } from 'tempo-alloy';
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    const provider = await ProviderBuilder.new_with_network<TempoNetwork>()
+      .connect('https://rpc.moderato.tempo.xyz');
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    const address = '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb';
+    const txHashes = await provider.request({
+      method: 'tempo_fundAddress',
+      params: [address]
+    });
 
-### Step 3: Go live
+    console.log('Funded! Transaction hashes:', txHashes);
+    ```
+  </Tab>
+</Tabs>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+### Check your balance
+
+Verify you received the tokens:
+
+<Tabs>
+  <Tab title="Command Line">
+    ```bash
+    # AlphaUSD token address
+    export ALPHA_USD="0x20c0000000000000000000000000000000000001"
+    export YOUR_ADDRESS="0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"
+
+    cast call $ALPHA_USD "balanceOf(address)(uint256)" $YOUR_ADDRESS \
+      --rpc-url https://rpc.moderato.tempo.xyz
+    ```
+    
+    The balance is returned in token units (6 decimals). Divide by 1,000,000 to get the USD amount.
+  </Tab>
+  <Tab title="TypeScript">
+    ```typescript
+    import { address } from 'alloy/primitives';
+    import { ITIP20 } from 'tempo-alloy/contracts/precompiles';
+
+    const alphaUSD = ITIP20.new(
+      address('0x20c0000000000000000000000000000000000001'),
+      provider
+    );
+
+    const balance = await alphaUSD.balanceOf(
+      address('0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb')
+    );
+
+    console.log(`Balance: ${balance.toString()} tokens (${balance / 1_000_000n} USD)`);
+    ```
+  </Tab>
+</Tabs>
+
+## Step 3: Make your first transfer
+
+Now let's send a TIP-20 transfer. TIP-20 is Tempo's enhanced token standard that extends ERC-20 with payment-specific features.
+
+### Basic transfer
+
+<Tabs>
+  <Tab title="Command Line">
+    ```bash
+    # Set up your environment
+    export ALPHA_USD="0x20c0000000000000000000000000000000000001"
+    export RECIPIENT="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+    export RPC_URL="https://rpc.moderato.tempo.xyz"
+    export PRIVATE_KEY="0x..."  # Your private key
+
+    # Send 10 USD (10,000,000 units with 6 decimals)
+    cast send $ALPHA_USD "transfer(address,uint256)" \
+      $RECIPIENT 10000000 \
+      --rpc-url $RPC_URL \
+      --private-key $PRIVATE_KEY
+    ```
+    
+    You'll see the transaction hash and receipt once it's confirmed.
+  </Tab>
+  <Tab title="TypeScript">
+    ```typescript
+    import { ProviderBuilder } from 'alloy';
+    import { TempoNetwork } from 'tempo-alloy';
+    import { ITIP20 } from 'tempo-alloy/contracts/precompiles';
+    import { address, U256 } from 'alloy/primitives';
+
+    // Connect to testnet
+    const provider = await ProviderBuilder.new_with_network<TempoNetwork>()
+      .connect(process.env.RPC_URL || 'https://rpc.moderato.tempo.xyz');
+
+    // AlphaUSD token
+    const alphaUSD = ITIP20.new(
+      address('0x20c0000000000000000000000000000000000001'),
+      provider
+    );
+
+    // Send 10 USD (10,000,000 units with 6 decimals)
+    const receipt = await alphaUSD
+      .transfer(
+        address('0x70997970C51812dc3A010C7d01b50e0d17dc79C8'),
+        U256.from(10_000_000)
+      )
+      .send()
+      .await
+      .get_receipt()
+      .await;
+
+    console.log(`Transfer successful! Hash: ${receipt.transaction_hash}`);
+    ```
+  </Tab>
+</Tabs>
+
+### Transfer with memo
+
+One of TIP-20's key features is the ability to include memos for payment reconciliation:
+
+<Tabs>
+  <Tab title="Command Line">
+    ```bash
+    # Convert memo to bytes32 (left-padded)
+    # For invoice "INV-12345"
+    cast send $ALPHA_USD "transferWithMemo(address,uint256,bytes32)" \
+      $RECIPIENT \
+      10000000 \
+      "$(cast --format-bytes32-string 'INV-12345')" \
+      --rpc-url $RPC_URL \
+      --private-key $PRIVATE_KEY
+    ```
+  </Tab>
+  <Tab title="TypeScript">
+    ```typescript
+    import { B256 } from 'alloy/primitives';
+
+    const receipt = await alphaUSD
+      .transferWithMemo(
+        address('0x70997970C51812dc3A010C7d01b50e0d17dc79C8'),
+        U256.from(10_000_000),
+        B256.left_padding_from('INV-12345'.as_bytes())
+      )
+      .send()
+      .await
+      .get_receipt()
+      .await;
+
+    console.log(`Transfer with memo successful! Hash: ${receipt.transaction_hash}`);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+Memos are stored on-chain as `bytes32` values. For larger data or PII, use commitment patterns (hash/locator) instead.
+</Note>
+
+## Step 4: Batch multiple payments
+
+Tempo Transactions allow you to batch multiple operations atomically. This is perfect for payroll, invoices, or settlements.
+
+<Tabs>
+  <Tab title="TypeScript">
+    ```typescript
+    import { TempoTransactionRequest, Call } from 'tempo-alloy';
+    import { SolCall } from 'alloy/sol-types';
+
+    const recipient1 = address('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+    const recipient2 = address('0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC');
+    const tokenAddress = address('0x20c0000000000000000000000000000000000001');
+
+    const calls: Call[] = [
+      {
+        to: tokenAddress,
+        input: ITIP20.transferCall({
+          to: recipient1,
+          amount: U256.from(100_000_000) // 100 USD
+        }).abi_encode(),
+        value: U256.ZERO
+      },
+      {
+        to: tokenAddress,
+        input: ITIP20.transferCall({
+          to: recipient2,
+          amount: U256.from(50_000_000) // 50 USD
+        }).abi_encode(),
+        value: U256.ZERO
+      }
+    ];
+
+    const pending = await provider.send_transaction(
+      TempoTransactionRequest({ calls, ...Default.default() })
+    );
+    const txHash = pending.tx_hash();
+
+    console.log(`Batch payment sent! Hash: ${txHash}`);
+    ```
+    
+    Both transfers succeed or fail atomically.
+  </Tab>
+  <Tab title="Command Line">
+    <Warning>
+    Batch transactions require the Tempo transaction format. Use the TypeScript SDK or build the transaction manually.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Understanding gas costs
+
+Tempo's gas costs are denominated in USD-stablecoins, not a volatile native token.
+
+<Note>
+All costs are approximate and may vary based on network conditions.
+</Note>
+
+| Operation | Typical Gas | Approx Cost (USD) |
+| --- | --- | --- |
+| TIP-20 transfer (existing address) | 50,000 | $0.0001 |
+| Transfer to new address | 300,000 | $0.0006 |
+| First transaction from new account | 300,000 | $0.0006 |
+| Batch payment (2 transfers) | ~120,000 | $0.0002 |
+| Transfer with memo | ~55,000 | $0.00011 |
+
+The costs are calculated based on:
+- Base gas price targeting $0.0001 per 50,000 gas
+- New state creation: 250,000 gas ([TIP-1000](/protocol/tips/tip-1000))
+- Account creation: 250,000 gas on first use
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Now that you've made your first transaction, explore more advanced features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Use Tempo SDKs" icon="code" href="/sdk/overview">
+    Deep dive into TypeScript, Rust, Go, and Foundry SDKs
+  </Card>
+  <Card title="Learn TIP-20" icon="book" href="/protocol/tip20/overview">
+    Understand the TIP-20 token standard and its features
+  </Card>
+  <Card title="Smart accounts" icon="key" href="/concepts/tempo-transactions">
+    Build with Tempo Transactions for fee sponsorship and batching
+  </Card>
+  <Card title="Deploy contracts" icon="rocket" href="/guides/deploying-contracts">
+    Deploy and interact with smart contracts on Tempo
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Testnet tokens
+
+The faucet provides these tokens:
+
+| Token | Address | Symbol | Decimals |
+| --- | --- | --- | --- |
+| AlphaUSD | `0x20c0000000000000000000000000000000000001` | AUSD | 6 |
+
+More testnet stablecoins will be added in the future.
+
+## Get help
+
+Run into issues? Here's how to get help:
+
+<CardGroup cols={2}>
+  <Card title="Documentation" icon="book" href="https://docs.tempo.xyz">
+    Browse comprehensive guides and references
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/tempoxyz/tempo/issues">
+    Report bugs or request features
+  </Card>
+  <Card title="Block Explorer" icon="magnifying-glass" href="https://explore.tempo.xyz">
+    Debug transactions and inspect state
+  </Card>
+  <Card title="RPC Reference" icon="terminal" href="/api/overview">
+    Full JSON-RPC API documentation
+  </Card>
+</CardGroup>

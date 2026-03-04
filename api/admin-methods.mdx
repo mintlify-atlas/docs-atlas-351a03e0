@@ -1,0 +1,125 @@
+---
+title: Admin Methods
+description: Administrative JSON-RPC methods for Tempo node operators
+---
+
+The `admin_*` namespace provides administrative methods for node operators to manage validator operations and inspect node configuration.
+
+<Warning>
+Admin methods should be protected and only accessible to trusted operators. Configure RPC access control appropriately.
+</Warning>
+
+## admin_validatorKey
+
+Returns the validator public key if this node is configured as a validator.
+
+<ResponseField name="result" type="bytes32 | null">
+  Ed25519 public key used by this node for validator operations in the consensus layer. Returns `null` if the node is not configured as a validator.
+</ResponseField>
+
+**Example Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "admin_validatorKey",
+  "params": [],
+  "id": 1
+}
+```
+
+**Example Response (Validator Node):**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+}
+```
+
+**Example Response (Non-Validator Node):**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": null
+}
+```
+
+## Use Cases
+
+### Validator Identity Verification
+
+Validators can use this method to verify their node is correctly configured with the expected public key:
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "admin_validatorKey",
+    "params": [],
+    "id": 1
+  }'
+```
+
+### Monitoring and Alerting
+
+Monitoring systems can query this endpoint to:
+- Verify validator nodes are properly configured
+- Track which nodes in a cluster are validators
+- Alert if a validator's configuration changes unexpectedly
+
+### Subblock Transaction Routing
+
+Applications can query the validator key to determine:
+- If this node accepts subblock transactions
+- The partial validator key to include in subblock transaction requests
+- Whether to route subblock transactions to this specific node
+
+## Implementation Details
+
+The validator key is:
+- Configured at node startup via command-line arguments or configuration file
+- Stored in `TempoAdminApi` instance created during node initialization  
+- Used by the RPC layer to filter incoming subblock transactions
+- Never changed during node runtime (requires restart to modify)
+
+**Source:** `crates/node/src/rpc/admin.rs:1-35`
+
+## Security Considerations
+
+<Warning>
+**Do not expose admin endpoints publicly**
+
+The validator key, while public information on-chain, should not be arbitrarily exposed via RPC to untrusted parties.
+</Warning>
+
+### Recommended Configuration
+
+Bind admin methods to localhost only:
+
+```toml
+# tempo.toml
+[rpc]
+addr = "127.0.0.1:8545"
+api = ["eth", "net", "web3", "consensus", "token"]
+
+[rpc.admin]
+addr = "127.0.0.1:8546"
+api = ["admin"]
+```
+
+Or use authentication middleware to protect admin endpoints.
+
+## Future Admin Methods
+
+Additional admin methods may be added for:
+- Node health and diagnostics
+- Transaction pool management
+- Peer management
+- Consensus layer debugging
+
+Check the [GitHub repository](https://github.com/tempo-chain/tempo) for the latest admin API additions.

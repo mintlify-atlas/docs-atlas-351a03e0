@@ -1,0 +1,407 @@
+---
+title: "Token Transfers"
+description: "Transfer methods, gas costs, and dedicated payment lanes"
+---
+
+TIP-20 provides multiple transfer methods optimized for different use cases, from standard ERC-20 compatibility to memo-attached payments.
+
+## Transfer Methods
+
+### Standard Transfer
+
+Transfer tokens from the caller to a recipient:
+
+```solidity
+function transfer(address to, uint256 amount) external returns (bool)
+```
+
+**Checks:**
+- Contract is not paused
+- Recipient is not the zero address or another TIP-20 contract
+- Caller has sufficient balance
+- Both caller and recipient are authorized by the transfer policy
+
+**Gas costs:**
+- To existing address: ~50,000 gas (0.1 cent)
+- To new address: ~300,000 gas (0.6 cent, includes 250,000 gas state creation cost from TIP-1000)
+
+### Transfer From
+
+Transfer tokens on behalf of another address using allowance:
+
+```solidity
+function transferFrom(
+    address from,
+    address to,
+    uint256 amount
+) external returns (bool)
+```
+
+**Additional checks:**
+- Caller has sufficient allowance from `from` address
+- Allowance is decremented (unless set to `type(uint256).max`)
+
+**Gas costs:**
+- Similar to `transfer()` plus ~5,000 gas for allowance update
+
+### Transfer With Memo
+
+Transfer tokens with an attached 32-byte memo:
+
+```solidity
+function transferWithMemo(
+    address to,
+    uint256 amount,
+    bytes32 memo
+) external
+```
+
+**Emits:**
+```solidity
+event TransferWithMemo(
+    address indexed from,
+    address indexed to,
+    uint256 amount,
+    bytes32 indexed memo
+)
+```
+
+**Gas costs:**
+- Adds ~5,000 gas to standard transfer for memo emission
+- Memo is indexed, enabling efficient event filtering
+
+See [Memos](/protocol/tip20/memos) for use cases.
+
+### Transfer From With Memo
+
+Combines allowance-based transfer with memo attachment:
+
+```solidity
+function transferFromWithMemo(
+    address from,
+    address to,
+    uint256 amount,
+    bytes32 memo
+) external returns (bool)
+```
+
+**Use cases:**
+- Payment processors spending on behalf of users
+- Invoice payments with reference tracking
+- Multi-party payment coordination
+
+## System Transfers
+
+### System Transfer From
+
+Internal precompile-only transfer function:
+
+```solidity
+function systemTransferFrom(
+    address from,
+    address to,
+    uint256 amount
+) external returns (bool)
+```
+
+**Restrictions:**
+- Only callable by the FeeManager precompile (`0xfeeC000000000000000000000000000000000000`)
+- Bypasses allowance checks
+- Still enforces transfer policy authorization
+
+**Purpose:**
+Enables the FeeManager to collect transaction fees without requiring users to approve the precompile.
+
+### Fee Management
+
+TIP-20 integrates with the FeeManager precompile for transaction fee deduction:
+
+```solidity
+// Called before transaction execution
+function transferFeePreTx(address from, uint256 amount) external
+
+// Called after transaction execution  
+function transferFeePostTx(
+    address to,
+    uint256 refund,
+    uint256 actualUsed
+) external
+```
+
+**Flow:**
+1. `transferFeePreTx` moves estimated fee from user to FeeManager
+2. Transaction executes
+3. `transferFeePostTx` refunds unused gas to user
+
+**Gas accounting:**
+- Pre-transfer moves funds without full transfer checks
+- Post-transfer only refunds, minimizing gas overhead
+- Emits `Transfer` event for actual fee used
+
+## Transfer Authorization
+
+All transfers check policy authorization via TIP-403:
+
+```solidity
+modifier transferAuthorized(address from, address to) {
+    if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, from)
+        || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, to)) {
+        revert PolicyForbids();
+    }
+    _;
+}
+```
+
+**Directional checks (TIP-1015):**
+- Sender authorization checks if `from` can send tokens
+- Recipient authorization checks if `to` can receive tokens
+- Allows asymmetric policies (e.g., vendor credits)
+
+See [Compliance](/protocol/tip20/compliance) for policy details.
+
+## Protected Recipients
+
+Transfers cannot be sent to:
+
+```solidity
+modifier validRecipient(address to) {
+    // Reject zero address
+    if (to == address(0)) revert InvalidRecipient();
+    
+    // Reject other TIP-20 tokens (0x20C0...)
+    if ((uint160(to) >> 64) == 0x20c000000000000000000000) {
+        revert InvalidRecipient();
+    }
+    _;
+}
+```
+
+**Prevented addresses:**
+- `address(0)` (burning must use `burn()` functions)
+- Other TIP-20 token contracts (prevents accidental token loss)
+
+## Pause State
+
+When a token is paused, all transfer functions revert:
+
+```solidity
+modifier notPaused() {
+    if (paused) revert ContractPaused();
+    _;
+}
+```
+
+**Paused functions:**
+- `transfer()`, `transferFrom()`
+- `transferWithMemo()`, `transferFromWithMemo()`
+- `mint()`, `burn()`
+- Reward distribution and claims
+
+**Not paused:**
+- `approve()` (setting allowances)
+- `permit()` (gasless approvals)
+- View functions (balances, allowances)
+
+## Gas Cost Breakdown
+
+### Transfer to Existing Address
+
+| Component | Gas Cost |
+|-----------|----------|
+| Base transaction cost | ~21,000 |
+| Transfer logic | ~24,000 |
+| Balance updates (2 × SSTORE) | ~5,000 |
+| **Total** | **~50,000** |
+| **Cost at baseline** | **0.1 cent** |
+
+### Transfer to New Address
+
+| Component | Gas Cost |
+|-----------|----------|
+| Base transaction cost | ~21,000 |
+| Transfer logic | ~24,000 |
+| New state element (balance) | 250,000 |
+| Balance updates | ~5,000 |
+| **Total** | **~300,000** |
+| **Cost at baseline** | **0.6 cent** |
+
+**Note:** The 250,000 gas state creation cost is from TIP-1000, which protects against adversarial state growth attacks.
+
+### First Transaction from New Account
+
+| Component | Gas Cost |
+|-----------|----------|
+| Base transaction cost | ~21,000 |
+| Account creation (nonce 0→1) | 250,000 |
+| Transfer logic | ~24,000 |
+| Balance updates | ~5,000 |
+| **Total** | **~300,000** |
+| **Cost at baseline** | **0.6 cent** |
+
+**Combined onboarding cost:**
+- Receive tokens (new balance): ~300,000 gas (0.6 cent)
+- First send (account creation): ~300,000 gas (0.6 cent)
+- **Total**: ~600,000 gas (1.2 cent)
+
+### Transfer With Memo
+
+| Component | Gas Cost |
+|-----------|----------|
+| Standard transfer | ~50,000 or ~300,000 |
+| Memo event emission | ~5,000 |
+| **Total** | **~55,000 or ~305,000** |
+
+## Allowances
+
+### Approve
+
+Set spending allowance for another address:
+
+```solidity
+function approve(address spender, uint256 amount) external returns (bool)
+```
+
+**Gas cost:** ~45,000 gas (new allowance) or ~5,000 gas (update)
+
+**Common pattern:**
+```solidity
+// Infinite approval (saves gas on future transfers)
+token.approve(spender, type(uint256).max);
+```
+
+### Permit (EIP-2612)
+
+Gasless approval via off-chain signature (TIP-1004):
+
+```solidity
+function permit(
+    address owner,
+    address spender,
+    uint256 value,
+    uint256 deadline,
+    uint8 v,
+    bytes32 r,
+    bytes32 s
+) external
+```
+
+**Benefits:**
+- No separate approval transaction needed
+- User signs off-chain message
+- Relayer or spender submits permit + action in one transaction
+
+**Gas cost:** ~50,000 gas (paid by transaction submitter)
+
+## Reward Accounting
+
+Transfers automatically update reward accounting for opted-in addresses:
+
+```solidity
+function _transfer(address from, address to, uint256 amount) internal {
+    // Update rewards for sender (if opted-in)
+    address fromsRewardRecipient = _updateRewardsAndGetRecipient(from);
+    
+    // Update rewards for receiver (if opted-in)
+    address tosRewardRecipient = _updateRewardsAndGetRecipient(to);
+    
+    // Update opted-in supply tracking
+    if (fromsRewardRecipient != address(0)) {
+        if (tosRewardRecipient == address(0)) {
+            optedInSupply -= uint128(amount);
+        }
+    } else if (tosRewardRecipient != address(0)) {
+        optedInSupply += uint128(amount);
+    }
+    
+    // Perform balance updates
+    balanceOf[from] -= amount;
+    balanceOf[to] += amount;
+    
+    emit Transfer(from, to, amount);
+}
+```
+
+**Reward updates:**
+- Accrues pending rewards before balance changes
+- Updates opted-in supply tracking
+- No additional gas for non-opted-in transfers
+- Opted-in transfers add ~10,000 gas
+
+## Error Conditions
+
+```solidity
+error ContractPaused();              // Token is paused
+error InsufficientBalance(...);      // Sender has insufficient balance
+error InsufficientAllowance();       // Insufficient allowance for transferFrom
+error InvalidRecipient();            // Invalid recipient address
+error PolicyForbids();               // Transfer blocked by policy
+error ProtectedAddress();            // Cannot transfer to protected address
+```
+
+## Integration Example
+
+```solidity
+import { ITIP20 } from "./interfaces/ITIP20.sol";
+
+contract PaymentProcessor {
+    ITIP20 public immutable token;
+    
+    constructor(ITIP20 _token) {
+        token = _token;
+    }
+    
+    // Process invoice payment with reference
+    function payInvoice(
+        address vendor,
+        uint256 amount,
+        bytes32 invoiceId
+    ) external {
+        // Transfer with memo for reconciliation
+        token.transferFromWithMemo(
+            msg.sender,
+            vendor,
+            amount,
+            invoiceId
+        );
+        
+        emit InvoicePaid(msg.sender, vendor, invoiceId, amount);
+    }
+    
+    event InvoicePaid(
+        address indexed payer,
+        address indexed vendor,
+        bytes32 indexed invoiceId,
+        uint256 amount
+    );
+}
+```
+
+## Best Practices
+
+### Gas Optimization
+
+- Use infinite approvals (`type(uint256).max`) to save gas on repeated transfers
+- Batch transfers when possible to amortize transaction costs
+- Use memos only when needed for reconciliation
+- Consider permit for gasless approval flows
+
+### Error Handling
+
+- Check token balance before attempting transfers
+- Verify transfer policy authorization if known
+- Handle paused state gracefully
+- Use try/catch for external token transfers
+
+### Security
+
+- Never transfer to computed addresses without validation
+- Verify recipient is not another TIP-20 contract
+- Check transfer success return value
+- Consider reentrancy when transferring to contracts
+
+## See Also
+
+- [Memos](/protocol/tip20/memos) - Payment references and reconciliation
+- [Compliance](/protocol/tip20/compliance) - Transfer policy integration
+- [TIP-1000](/protocol/tips/tip-1000) - State creation costs
+- [TIP-1015](/protocol/tips/tip-1015) - Directional authorization

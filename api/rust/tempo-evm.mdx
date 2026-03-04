@@ -1,0 +1,407 @@
+---
+title: tempo-evm
+description: Tempo's EVM implementation with custom execution logic and gas parameters
+---
+
+The `tempo-evm` crate implements Tempo's EVM execution layer, built on top of Reth's EVM framework. It handles block execution, transaction processing, and Tempo-specific gas accounting.
+
+## Installation
+
+```toml
+[dependencies]
+tempo-evm = "0.1.0"
+```
+
+## Core Types
+
+### TempoEvmConfig
+
+Main EVM configuration for Tempo.
+
+```rust
+use tempo_evm::TempoEvmConfig;
+use std::sync::Arc;
+use tempo_chainspec::TempoChainSpec;
+
+// Create EVM config
+let chain_spec = Arc::new(TempoChainSpec::mainnet());
+let evm_config = TempoEvmConfig::new(chain_spec);
+
+// Access chain spec
+let spec = evm_config.chain_spec();
+
+// Get mainnet config
+let mainnet = TempoEvmConfig::mainnet();
+```
+
+**Fields:**
+
+<ParamField path="inner" type="EthEvmConfig<TempoChainSpec, TempoEvmFactory>">
+  Inner Ethereum EVM config with Tempo chain spec
+</ParamField>
+
+<ParamField path="block_assembler" type="TempoBlockAssembler">
+  Block assembly logic for building new blocks
+</ParamField>
+
+**Source:** `crates/evm/src/lib.rs:47-82`
+
+### TempoEvmFactory
+
+Factory for creating Tempo EVM instances.
+
+```rust
+use tempo_evm::evm::TempoEvmFactory;
+
+// TempoEvmFactory implements:
+// - EvmFactory trait
+// - Creates TempoEvm instances with Tempo-specific handlers
+```
+
+**Source:** `crates/evm/src/evm/mod.rs`
+
+## Block Execution
+
+### TempoBlockExecutionCtx
+
+Execution context for processing Tempo blocks.
+
+```rust
+use tempo_evm::TempoBlockExecutionCtx;
+use std::collections::HashMap;
+
+pub struct TempoBlockExecutionCtx<'a> {
+    /// Standard Ethereum execution context
+    pub inner: EthBlockExecutionCtx<'a>,
+    
+    /// Gas limit for general (non-payment) transactions
+    pub general_gas_limit: u64,
+    
+    /// Gas limit for payment lane transactions
+    pub shared_gas_limit: u64,
+    
+    /// Validator set for subblock fee distribution
+    pub validator_set: Option<&'a [B256]>,
+    
+    /// Mapping of validator keys to fee recipients
+    pub subblock_fee_recipients: HashMap<PartialValidatorKey, Address>,
+}
+```
+
+**Source:** `crates/evm/src/context.rs:14`
+
+### TempoNextBlockEnvAttributes
+
+Attributes for building the next block.
+
+```rust
+use tempo_evm::TempoNextBlockEnvAttributes;
+use reth_evm::NextBlockEnvAttributes;
+
+pub struct TempoNextBlockEnvAttributes {
+    /// Standard Ethereum block attributes
+    pub inner: NextBlockEnvAttributes,
+    
+    /// General gas limit
+    pub general_gas_limit: u64,
+    
+    /// Shared gas limit
+    pub shared_gas_limit: u64,
+    
+    /// Millisecond precision timestamp
+    pub timestamp_millis_part: u64,
+    
+    /// Subblock fee recipient mapping
+    pub subblock_fee_recipients: HashMap<PartialValidatorKey, Address>,
+}
+```
+
+**Source:** `crates/evm/src/context.rs`
+
+## State Access
+
+### TempoStateAccess
+
+Trait for accessing Tempo-specific state.
+
+```rust
+use tempo_evm::TempoStateAccess;
+use alloy_primitives::{Address, U256};
+
+pub trait TempoStateAccess {
+    /// Get the fee token address for a transaction
+    fn get_fee_token(
+        &mut self,
+        tx_env: &TxEnv,
+        fee_payer: Address,
+        spec: SpecId,
+    ) -> Result<Address, Error>;
+    
+    /// Get token balance for an address
+    fn get_token_balance(
+        &mut self,
+        token: Address,
+        account: Address,
+        spec: SpecId,
+    ) -> Result<U256, Error>;
+}
+```
+
+**Source:** `tempo-revm` crate (re-exported)
+
+## Block Assembly
+
+### TempoBlockAssembler
+
+Assembles blocks from transactions and system transactions.
+
+```rust
+use tempo_evm::TempoBlockAssembler;
+use std::sync::Arc;
+
+// Create assembler
+let chain_spec = Arc::new(TempoChainSpec::mainnet());
+let assembler = TempoBlockAssembler::new(chain_spec);
+
+// Assembles:
+// - User transactions
+// - Subblock metadata system transaction
+// - TIPFeeManager settlement system transaction
+```
+
+**Source:** `crates/evm/src/assemble.rs`
+
+## Receipt Building
+
+### TempoReceiptBuilder
+
+Builds transaction receipts with Tempo-specific fields.
+
+```rust
+use tempo_evm::TempoReceiptBuilder;
+
+// Adds:
+// - feeToken field
+// - feePayer field
+// - Proper log indexing
+```
+
+**Source:** `crates/evm/src/block.rs`
+
+## Gas Parameters
+
+Tempo uses custom gas parameters defined in the `tempo-revm` crate:
+
+```rust
+use tempo_evm::tempo_gas_params;
+
+// Get gas params for a hardfork
+let params = tempo_gas_params(spec_id);
+
+// Parameters (TIP-1000):
+// - CREATE: 16,000
+// - CREATE2: 16,000
+// - SSTORE_SET: 16,000
+// - SSTORE_RESET: 800
+// - REFUND_SSTORE_CLEARS: 800
+```
+
+References: [TIP-1000](https://docs.tempo.xyz/protocol/tips/tip-1000)
+
+## Block Environment
+
+### TempoBlockEnv
+
+Block environment with millisecond timestamp precision.
+
+```rust
+use tempo_evm::TempoBlockEnv;
+
+pub struct TempoBlockEnv {
+    /// Standard block environment
+    pub inner: BlockEnv,
+    
+    /// Millisecond component (0-999)
+    pub timestamp_millis_part: u64,
+}
+
+// Full timestamp:
+let timestamp_ms = block_env.inner.timestamp.to::<u64>() * 1000 
+    + block_env.timestamp_millis_part;
+```
+
+**Source:** `tempo-revm` crate (re-exported)
+
+## Halt Reasons
+
+### TempoHaltReason
+
+Tempo-specific transaction halt reasons.
+
+```rust
+use tempo_evm::TempoHaltReason;
+
+pub enum TempoHaltReason {
+    /// Invalid fee token
+    InvalidFeeToken,
+    
+    /// Insufficient fee token balance
+    InsufficientFeeTokenBalance,
+    
+    /// Invalid nonce key
+    InvalidNonceKey,
+    
+    /// Transaction expired (past valid_before)
+    TransactionExpired,
+    
+    /// Transaction not yet valid (before valid_after)
+    TransactionNotYetValid,
+    
+    /// Invalid key authorization
+    InvalidKeyAuthorization,
+    
+    // ... other reasons
+}
+```
+
+**Source:** `tempo-revm` crate (re-exported)
+
+## Context Creation
+
+The `TempoEvmConfig` provides methods to create execution contexts:
+
+```rust
+use tempo_evm::TempoEvmConfig;
+use reth_primitives_traits::SealedBlock;
+
+let evm_config = TempoEvmConfig::mainnet();
+
+// Create context from existing block
+let ctx = evm_config.context_for_block(&sealed_block)?;
+
+// Create context for next block
+let ctx = evm_config.context_for_next_block(
+    &parent_header,
+    next_block_attributes
+)?;
+```
+
+**Block Context:**
+- Decodes subblock metadata from system transaction
+- Extracts validator -> fee_recipient mapping
+- Calculates gas limits
+
+**Next Block Context:**
+- Uses provided attributes
+- Sets up subblock fee recipients
+- Configures gas limits
+
+**Source:** `crates/evm/src/lib.rs:183-245`
+
+## EVM Environment
+
+Create EVM environments for transaction execution:
+
+```rust
+use tempo_evm::TempoEvmConfig;
+use tempo_primitives::TempoHeader;
+
+let evm_config = TempoEvmConfig::mainnet();
+
+// Create EVM env from header
+let evm_env = evm_config.evm_env(&header)?;
+
+// Create EVM env for next block
+let evm_env = evm_config.next_evm_env(
+    &parent_header,
+    &next_block_attributes
+)?;
+```
+
+The environment includes:
+- Chain ID and spec ID
+- Block environment (number, timestamp, gas limits, etc.)
+- Configuration environment (gas params, hard fork rules)
+- Tempo-specific parameters (timestamp_millis_part)
+
+**Source:** `crates/evm/src/lib.rs:122-181`
+
+## Gas Limit Calculation
+
+Tempo splits block gas limit into multiple lanes:
+
+```rust
+// Block gas limit: 500M
+let block_gas_limit = 500_000_000;
+
+// Shared (payment) lane: block_gas_limit / 10
+let shared_gas_limit = block_gas_limit / 10; // 50M
+
+// General lane (T1+): Fixed 30M
+let general_gas_limit = 30_000_000;
+
+// Remaining for other lanes
+let remaining = block_gas_limit - shared_gas_limit - general_gas_limit;
+```
+
+References: [TIP-1017](https://docs.tempo.xyz/protocol/tips/tip-1017)
+
+**Source:** `tempo-consensus` crate constant `TEMPO_SHARED_GAS_DIVISOR`
+
+## Error Types
+
+### TempoEvmError
+
+```rust
+use tempo_evm::TempoEvmError;
+
+pub enum TempoEvmError {
+    /// No subblock metadata found in block
+    NoSubblockMetadataFound,
+    
+    // ... other errors
+}
+```
+
+**Source:** `crates/evm/src/error.rs`
+
+## Example: Executing a Block
+
+```rust
+use tempo_evm::{TempoEvmConfig, TempoBlockExecutionCtx};
+use reth_primitives_traits::SealedBlock;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    // Setup
+    let chain_spec = Arc::new(TempoChainSpec::mainnet());
+    let evm_config = TempoEvmConfig::new(chain_spec);
+    
+    // Get sealed block
+    let sealed_block: SealedBlock<Block> = get_block().await?;
+    
+    // Create execution context
+    let ctx = evm_config.context_for_block(&sealed_block)?;
+    
+    // Create EVM environment
+    let evm_env = evm_config.evm_env(sealed_block.header())?;
+    
+    // Execute block with context and env
+    // (actual execution requires full EVM setup)
+    
+    Ok(())
+}
+```
+
+## Features
+
+- `rpc` - RPC type conversions and Tempo-specific RPC handlers
+- `engine` - Engine API support for block building
+
+## See Also
+
+- [tempo-consensus](/api/rust/tempo-consensus) - Consensus validation
+- [tempo-primitives](/api/rust/tempo-primitives) - Primitive types
+- [TIP-1000](https://docs.tempo.xyz/protocol/tips/tip-1000) - Gas parameter changes
+- [TIP-1017](https://docs.tempo.xyz/protocol/tips/tip-1017) - Transaction lanes

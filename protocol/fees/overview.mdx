@@ -1,0 +1,227 @@
+---
+title: Fee System Overview
+description: Tempo's stablecoin-based fee system with automatic conversion and predictable costs
+---
+
+Tempo's fee system enables users to pay transaction fees in any USD-denominated TIP-20 stablecoin. The protocol automatically converts between different stablecoins using the Fee AMM, ensuring validators receive fees in their preferred token while users pay in theirs.
+
+## Key Features
+
+### Stablecoin Gas Payments
+
+Unlike traditional blockchains that require native tokens for gas, Tempo accepts any USD-denominated TIP-20 token as a fee payment method. Users can pay fees in:
+
+- **pathUSD** (`0x20C0000000000000000000000000000000000000`) - Tempo's native stablecoin
+- **USDC**, **USDT**, or any other USD-denominated TIP-20 token
+- Any token the validator accepts (determined by Fee AMM liquidity)
+
+This eliminates the need to acquire and manage a separate gas token, simplifying the user experience for payment applications.
+
+### Target Cost Model
+
+Tempo's gas pricing targets predictable dollar costs for common operations:
+
+| Operation | Target Cost | Gas Amount |
+|-----------|------------|------------|
+| TIP-20 transfer (existing address) | $0.0001 (0.1 cents) | 50,000 gas |
+| TIP-20 transfer (new address) | $0.0006 (0.6 cents) | 300,000 gas |
+| Account creation (first use) | $0.0005 (0.5 cents) | 250,000 gas |
+| Contract deployment (1 KB) | $0.035 (3.5 cents) | 1,750,000 gas |
+
+These costs assume a base fee of **2,000 attodollars/gas** (2 × 10⁻¹⁵ USD per gas unit).
+
+<Info>
+**Economic Units**
+
+Tempo uses precise economic units for fee accounting:
+- **Microdollars (μUSD)**: TIP-20 token units at 10⁻⁶ USD precision (6 decimals)
+- **Attodollars (aUSD)**: Gas pricing units at 10⁻¹⁸ USD precision
+
+See [Gas Pricing](/protocol/fees/gas-pricing) for details.
+</Info>
+
+### Automatic Fee Conversion
+
+When a user's preferred fee token differs from the validator's preferred token, the Fee AMM automatically converts between them:
+
+```
+User pays:     100,000 USDC (user token)
+         ↓
+   Fee AMM:     Converts at 99.7% rate
+         ↓
+Validator receives: 99,700 pathUSD (validator token)
+```
+
+The conversion uses a simple linear pricing model with a 0.3% spread, ensuring minimal slippage and predictable costs.
+
+## Fee Collection Flow
+
+### 1. Transaction Validation
+
+When a transaction enters the mempool, the protocol:
+
+1. Resolves the user's fee token preference
+2. Calculates the maximum fee amount: `maxFee = gasLimit × baseFee`
+3. Checks if the user has sufficient balance
+4. If conversion is needed, verifies Fee AMM has sufficient liquidity
+
+### 2. Pre-Transaction Collection
+
+Before executing the transaction, the protocol calls `collectFeePreTx` on the FeeManager:
+
+```solidity
+function collectFeePreTx(
+    address user,
+    address userToken,
+    uint256 maxAmount
+) external
+```
+
+This function:
+- Transfers `maxAmount` of `userToken` from the user to the FeeManager
+- If conversion is needed, verifies sufficient AMM liquidity
+- Temporarily holds the tokens in the FeeManager
+
+See `FeeManager.sol:38` for implementation.
+
+### 3. Transaction Execution
+
+The transaction executes normally, consuming gas based on the operations performed.
+
+### 4. Post-Transaction Settlement
+
+After execution, the protocol calls `collectFeePostTx`:
+
+```solidity
+function collectFeePostTx(
+    address user,
+    uint256 maxAmount,
+    uint256 actualUsed,
+    address userToken
+) external
+```
+
+This function:
+- Calculates the refund: `refund = maxAmount - actualUsed`
+- Returns excess tokens to the user
+- Converts `actualUsed` tokens via the Fee AMM (if needed)
+- Credits the validator with converted tokens
+
+See `FeeManager.sol:62` for implementation.
+
+### 5. Validator Distribution
+
+Validators can withdraw their collected fees at any time:
+
+```solidity
+function distributeFees(address validator, address token) external
+```
+
+This transfers all collected fees for the specified token to the validator's address.
+
+See `FeeManager.sol:100` for implementation.
+
+## Fee Token Selection
+
+### User Preference
+
+Users specify their fee token preference by calling:
+
+```solidity
+FeeManager(0xfeeC000000000000000000000000000000000000)
+    .setUserToken(tokenAddress);
+```
+
+The preference persists across all future transactions from that address.
+
+### Validator Preference
+
+Validators specify which token they want to receive fees in:
+
+```solidity
+FeeManager(0xfeeC000000000000000000000000000000000000)
+    .setValidatorToken(tokenAddress);
+```
+
+<Warning>
+Validators cannot change their fee token within the same block they're producing. Attempting to call `setValidatorToken` from the block coinbase address reverts with `CANNOT_CHANGE_WITHIN_BLOCK`.
+</Warning>
+
+### Default Token
+
+If no preference is set:
+- Users default to **pathUSD** (`0x20C0000000000000000000000000000000000000`)
+- Validators default to **pathUSD**
+
+## Fee AMM Liquidity
+
+For fee conversion to work, the Fee AMM must have sufficient liquidity in the relevant trading pair:
+
+- **Pool structure**: Directional pools for each `(userToken → validatorToken)` pair
+- **Liquidity provision**: Single-sided deposits (validator token only)
+- **Rebalancing**: Market participants can arbitrage via `rebalanceSwap`
+
+See [Fee AMM](/protocol/fees/fee-amm) for details on liquidity provision and pool mechanics.
+
+## Gas Price Discovery
+
+Tempo uses an EIP-1559-style base fee mechanism with stablecoin denomination:
+
+- **Base fee**: Dynamically adjusts based on block fullness
+- **Target**: 50% block utilization
+- **Floor**: Minimum base fee prevents spam attacks
+
+See [Gas Pricing](/protocol/fees/gas-pricing) for the complete pricing model.
+
+## State Creation Costs
+
+Tempo significantly increases gas costs for state-creating operations to prevent spam attacks:
+
+| Operation | Standard Cost | Rationale |
+|-----------|--------------|----------|
+| New storage slot (SSTORE 0→nonzero) | 250,000 gas | Prevents state bloat attacks |
+| Account creation (first nonce write) | 250,000 gas | Economic deterrent for mass account creation |
+| Contract code (per byte) | 1,000 gas | Linear pricing for code storage |
+| Contract creation overhead | 500,000 gas | Covers metadata storage (keccak, codesize) |
+
+At the target base fee, creating 1 TB of state costs approximately **$50 million**, providing strong economic protection against adversarial state growth.
+
+See [TIP-1000](/protocol/tips/tip-1000) for the full specification.
+
+## Fee Token Introspection
+
+Smart contracts can query which fee token is being used for the current transaction:
+
+```solidity
+interface IFeeManager {
+    function getFeeToken() external view returns (address);
+}
+
+// Usage
+address feeToken = IFeeManager(0xfeeC000000000000000000000000000000000000)
+    .getFeeToken();
+```
+
+This enables contracts to implement fee-aware logic, such as:
+- Adjusting pricing based on the fee token
+- Routing decisions that consider fee costs
+- Logging fee token for off-chain indexing
+
+See [TIP-1007](/protocol/tips/tip-1007) for the specification.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gas Pricing" icon="gauge-high" href="/protocol/fees/gas-pricing">
+    Learn about attodollar denomination and base fee dynamics
+  </Card>
+  <Card title="Fee AMM" icon="arrows-rotate" href="/protocol/fees/fee-amm">
+    Understand automatic stablecoin conversion mechanics
+  </Card>
+  <Card title="Stablecoin Fees" icon="dollar-sign" href="/protocol/fees/stablecoin-fees">
+    Guide to paying gas in USD stablecoins
+  </Card>
+  <Card title="TIP-1000" icon="file-lines" href="/protocol/tips/tip-1000">
+    State creation cost specification
+  </Card>
+</CardGroup>

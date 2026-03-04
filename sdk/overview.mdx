@@ -1,0 +1,114 @@
+---
+title: SDKs Overview
+description: Build on Tempo with official SDKs for TypeScript, Rust, Go, and Foundry
+---
+
+Tempo provides official SDKs to help you build payment applications, integrate with the blockchain, and interact with Tempo-specific features like TIP-20 tokens, batch payments, and account abstraction.
+
+## Available SDKs
+
+<CardGroup cols={2}>
+  <Card title="TypeScript SDK" icon="js" href="/sdk/typescript">
+    Build web and Node.js applications with tempo-viem
+  </Card>
+  <Card title="Rust SDK" icon="rust" href="/sdk/rust">
+    Native Rust bindings with tempo-alloy
+  </Card>
+  <Card title="Go SDK" icon="golang" href="/sdk/go">
+    Go bindings for Tempo integration
+  </Card>
+  <Card title="Foundry" icon="hammer" href="/sdk/foundry">
+    Smart contract development and testing
+  </Card>
+</CardGroup>
+
+## When to Use Each SDK
+
+### TypeScript SDK
+
+Use the TypeScript SDK when building:
+- Web applications with wallet integrations
+- Payment dashboards and interfaces
+- Backend services in Node.js
+- React, Next.js, or Vue.js applications
+
+**Best for**: Frontend developers and full-stack JavaScript/TypeScript teams
+
+### Rust SDK
+
+Use the Rust SDK when building:
+- High-performance payment processors
+- Backend services requiring low latency
+- Blockchain infrastructure and tooling
+- Applications that need type safety and performance
+
+**Best for**: Systems programmers, blockchain infrastructure teams, and performance-critical applications
+
+### Go SDK
+
+Use the Go SDK when building:
+- Microservices and distributed systems
+- Payment processing backends
+- Integration with existing Go codebases
+- Cloud-native applications
+
+**Best for**: Backend developers and teams using Go for server-side applications
+
+### Foundry
+
+Use Foundry when:
+- Developing and testing smart contracts
+- Deploying contracts to Tempo
+- Running local Tempo forks for testing
+- Interacting with Tempo via command-line tools
+
+**Best for**: Smart contract developers and teams building on-chain applications
+
+## Common Features
+
+All SDKs provide support for:
+
+- **TIP-20 Tokens**: Native stablecoin transfers with memos and compliance
+- **Batch Payments**: Atomic multi-recipient transactions
+- **Account Abstraction**: Fee sponsorship, scheduled payments, and passkey authentication
+- **Standard JSON-RPC**: Full Ethereum compatibility for familiar workflows
+- **Tempo Extensions**: Access to Tempo-specific precompiles and transaction types
+
+## Network Configuration
+
+All SDKs connect to Tempo testnet by default:
+
+| Property | Value |
+|----------|-------|
+| **Network Name** | Tempo Testnet (Moderato) |
+| **Chain ID** | `42431` |
+| **HTTP RPC** | `https://rpc.moderato.tempo.xyz` |
+| **WebSocket** | `wss://rpc.moderato.tempo.xyz` |
+| **Explorer** | `https://explore.tempo.xyz` |
+
+## Getting Testnet Funds
+
+To test with real tokens, use the Tempo faucet:
+
+```bash
+cast rpc tempo_fundAddress <ADDRESS> --rpc-url https://rpc.moderato.tempo.xyz
+```
+
+Or visit the [web faucet](https://docs.tempo.xyz/quickstart/faucet).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with Tempo in 5 minutes
+  </Card>
+  <Card title="TIP-20 Standard" icon="coins" href="/protocol/tip20/overview">
+    Learn about Tempo's token standard
+  </Card>
+  <Card title="Account Abstraction" icon="user-gear" href="/concepts/tempo-transactions">
+    Build with smart accounts
+  </Card>
+  <Card title="Examples" icon="code" href="/guides/making-payments">
+    View integration examples
+  </Card>
+</CardGroup>

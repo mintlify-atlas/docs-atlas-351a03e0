@@ -1,0 +1,191 @@
+---
+title: "TIP-20 Token Standard"
+description: "ERC-20 compatible token standard with compliance, memos, and rewards"
+---
+
+TIP-20 is Tempo's token standard that extends ERC-20 with protocol-level features for payments, compliance, and rewards distribution. All TIP-20 tokens use 6 decimals for microdollar precision.
+
+## Key Features
+
+### ERC-20 Compatibility
+
+TIP-20 is fully compatible with ERC-20, implementing all standard functions:
+
+- `transfer(address to, uint256 amount)`
+- `transferFrom(address from, address to, uint256 amount)`
+- `approve(address spender, uint256 amount)`
+- `balanceOf(address account)`
+- `totalSupply()`
+- `allowance(address owner, address spender)`
+
+TIP-20 also supports EIP-2612 permit functionality for gasless approvals via off-chain signatures (TIP-1004).
+
+### Transfer Memos
+
+TIP-20 extends transfers with optional on-chain memos for payment reconciliation:
+
+- `transferWithMemo(address to, uint256 amount, bytes32 memo)`
+- `transferFromWithMemo(address from, address to, uint256 amount, bytes32 memo)`
+
+Memos are stored as 32-byte hashes on-chain, enabling:
+- Invoice reference tracking
+- Payment reconciliation
+- Multi-party transaction coordination
+
+See [Memos](/protocol/tip20/memos) for details.
+
+### Compliance Integration
+
+TIP-20 tokens integrate with TIP-403 transfer policies for programmable compliance:
+
+```solidity
+// Token references a policy ID
+uint64 public transferPolicyId;
+
+// Transfers check authorization
+if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, from)
+    || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, to)) {
+    revert PolicyForbids();
+}
+```
+
+Policies can implement:
+- Whitelist/blacklist controls
+- KYC/AML requirements
+- Geographic restrictions
+- Asymmetric sender/recipient rules (TIP-1015)
+
+See [Compliance](/protocol/tip20/compliance) for details.
+
+### Reward Distribution
+
+TIP-20 includes native support for distributing yield or rewards to token holders:
+
+- Holders opt-in by calling `setRewardRecipient(address)`
+- Rewards are distributed proportionally based on opted-in balances
+- Recipients can delegate rewards to a different address
+- `claimRewards()` transfers accrued rewards to the recipient
+
+Reward accounting uses fixed-point arithmetic (1e18 precision) to track global and per-user reward rates without requiring iterations over all holders.
+
+### Administrative Controls
+
+TIP-20 tokens support role-based administration:
+
+- `ISSUER_ROLE` - Mint and burn tokens
+- `PAUSE_ROLE` / `UNPAUSE_ROLE` - Pause transfers
+- `BURN_BLOCKED_ROLE` - Burn from blocked addresses (TIP-1015)
+- `BURN_AT_ROLE` - Burn from any address (TIP-1006)
+- `DEFAULT_ADMIN_ROLE` - Manage roles and policies
+
+Administrators can:
+- Set supply caps
+- Change transfer policies
+- Pause/unpause the token
+- Mint and burn tokens
+
+## Token Metadata
+
+Each TIP-20 token has:
+
+```solidity
+string public name;        // e.g., "Path USD"
+string public symbol;      // e.g., "pathUSD"
+string public currency;    // e.g., "USD" (for quote token routing)
+uint8 public decimals;     // Always 6 (microdollar precision)
+```
+
+The `currency` field is used by the Stablecoin DEX for quote token routing and validation.
+
+## Quote Tokens
+
+TIP-20 tokens form a hierarchy via quote tokens:
+
+```solidity
+ITIP20 public quoteToken;      // Current quote token
+ITIP20 public nextQuoteToken;  // Pending quote token (for migrations)
+```
+
+Quote tokens determine:
+- Trading pairs on the Stablecoin DEX
+- Cross-currency conversion paths
+- Token relationships for pricing
+
+Administrators can propose a new quote token with `setNextQuoteToken()` and complete the migration with `completeQuoteTokenUpdate()` after ensuring no circular references.
+
+## Gas Efficiency
+
+TIP-20 is optimized for low-cost payments:
+
+- **Transfer to existing address**: ~50,000 gas (0.1 cent at baseline pricing)
+- **Transfer to new address**: ~300,000 gas (0.6 cent, includes state creation)
+- **Transfer with memo**: Adds ~5,000 gas for memo emission
+
+See [Transfers](/protocol/tip20/transfers) for gas cost details.
+
+## Factory Deployment
+
+TIP-20 tokens are deployed via the TIP20Factory precompile at address `0x20Fc000000000000000000000000000000000000`:
+
+```solidity
+function createToken(
+    string memory name,
+    string memory symbol,
+    string memory currency,
+    ITIP20 quoteToken
+) external returns (ITIP20)
+```
+
+The factory ensures:
+- Deterministic addresses
+- Consistent initialization
+- Proper role configuration
+- Integration with protocol precompiles
+
+## Contract Address
+
+All TIP-20 tokens are deployed with addresses in the range:
+
+```
+0x20C0000000000000000000000000000000000000
+to
+0x20CFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+```
+
+This reserved address space enables:
+- Fast token detection
+- Protocol-level optimizations
+- Prevention of transfers to other TIP-20 contracts
+
+## Standard Decimals
+
+All TIP-20 tokens use **6 decimals** for microdollar precision:
+
+- 1 token unit = 1 microdollar = 0.000001 USD
+- No need to query decimals for TIP-20 tokens
+- Consistent precision across all USD-denominated tokens
+- Simplified arithmetic and display logic
+
+This differs from ERC-20's variable decimals (often 18) but provides human-readable dollar amounts.
+
+## Related TIPs
+
+- **TIP-1000**: State creation cost increases (affects transfer gas costs)
+- **TIP-1004**: Permit functionality (gasless approvals)
+- **TIP-1006**: burnAt function (privileged burning)
+- **TIP-1015**: Compound transfer policies (asymmetric compliance)
+- **TIP-403**: Transfer policy registry (compliance framework)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Transfers" icon="arrow-right-arrow-left" href="/protocol/tip20/transfers">
+    Learn about transfer methods and gas costs
+  </Card>
+  <Card title="Memos" icon="memo" href="/protocol/tip20/memos">
+    Attach payment references to transfers
+  </Card>
+  <Card title="Compliance" icon="shield-check" href="/protocol/tip20/compliance">
+    Integrate with TIP-403 policies
+  </Card>
+</CardGroup>

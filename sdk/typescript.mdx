@@ -1,0 +1,314 @@
+---
+title: TypeScript SDK
+description: Build web and Node.js applications on Tempo with tempo-viem
+---
+
+The TypeScript SDK provides a type-safe, developer-friendly interface for building on Tempo. Built on top of [viem](https://viem.sh), it extends Ethereum tooling with Tempo-specific features like TIP-20 tokens, batch payments, and account abstraction.
+
+## Installation
+
+<Tabs>
+  <Tab title="npm">
+    ```bash
+    npm install tempo-viem viem
+    ```
+  </Tab>
+  <Tab title="yarn">
+    ```bash
+    yarn add tempo-viem viem
+    ```
+  </Tab>
+  <Tab title="pnpm">
+    ```bash
+    pnpm add tempo-viem viem
+    ```
+  </Tab>
+</Tabs>
+
+## Quick Start
+
+### Configure Provider
+
+Connect to Tempo testnet:
+
+```typescript
+import { createPublicClient, http } from 'viem'
+import { tempoTestnet } from 'tempo-viem/chains'
+
+const client = createPublicClient({
+  chain: tempoTestnet,
+  transport: http('https://rpc.moderato.tempo.xyz')
+})
+```
+
+### Get Token Balance
+
+Query TIP-20 token balances:
+
+```typescript
+import { tip20Abi } from 'tempo-viem/abis'
+
+const balance = await client.readContract({
+  address: '0x20c0000000000000000000000000000000000001', // AlphaUSD
+  abi: tip20Abi,
+  functionName: 'balanceOf',
+  args: ['0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb']
+})
+```
+
+### Send Transfer
+
+Send a TIP-20 token transfer:
+
+```typescript
+import { createWalletClient, parseUnits } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+
+const account = privateKeyToAccount('0x...')
+const wallet = createWalletClient({
+  account,
+  chain: tempoTestnet,
+  transport: http('https://rpc.moderato.tempo.xyz')
+})
+
+const hash = await wallet.writeContract({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  functionName: 'transfer',
+  args: [
+    '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb',
+    parseUnits('100', 6) // 100 tokens with 6 decimals
+  ]
+})
+
+const receipt = await client.waitForTransactionReceipt({ hash })
+```
+
+## TIP-20 Tokens
+
+### Transfer with Memo
+
+Include reconciliation data in transfers:
+
+```typescript
+import { stringToHex, padHex } from 'viem'
+
+const memo = padHex(stringToHex('INV-12345'), { size: 32 })
+
+const hash = await wallet.writeContract({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  functionName: 'transferWithMemo',
+  args: [
+    '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb',
+    parseUnits('100', 6),
+    memo
+  ]
+})
+```
+
+### Watch Transfer Events
+
+Listen for incoming transfers:
+
+```typescript
+const unwatch = client.watchContractEvent({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  eventName: 'Transfer',
+  onLogs: (logs) => {
+    logs.forEach((log) => {
+      console.log(`Transfer: ${log.args.from} -> ${log.args.to}: ${log.args.value}`)
+    })
+  }
+})
+```
+
+### Filter by Recipient
+
+Watch transfers to a specific address:
+
+```typescript
+const unwatch = client.watchContractEvent({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  eventName: 'Transfer',
+  args: {
+    to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb'
+  },
+  onLogs: (logs) => {
+    console.log('Received payment:', logs)
+  }
+})
+```
+
+## Batch Payments
+
+Send multiple transfers atomically:
+
+```typescript
+import { tempoTransactionType } from 'tempo-viem'
+
+// Create multiple transfer calls
+const calls = [
+  {
+    to: '0x20c0000000000000000000000000000000000001',
+    data: encodeFunctionData({
+      abi: tip20Abi,
+      functionName: 'transfer',
+      args: ['0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb', parseUnits('100', 6)]
+    })
+  },
+  {
+    to: '0x20c0000000000000000000000000000000000001',
+    data: encodeFunctionData({
+      abi: tip20Abi,
+      functionName: 'transfer',
+      args: ['0x70997970C51812dc3A010C7d01b50e0d17dc79C8', parseUnits('50', 6)]
+    })
+  }
+]
+
+const hash = await wallet.sendTransaction({
+  type: tempoTransactionType,
+  calls,
+  maxFeePerGas: parseGwei('20'),
+  maxPriorityFeePerGas: parseGwei('1')
+})
+```
+
+## Account Abstraction
+
+### Fee Sponsorship
+
+Pay gas fees for users:
+
+```typescript
+const hash = await wallet.sendTransaction({
+  type: tempoTransactionType,
+  calls: [/* user's operations */],
+  feeToken: '0x20c0000000000000000000000000000000000001', // Pay fees in AlphaUSD
+  from: sponsorAddress, // Sponsor's address
+  maxFeePerGas: parseGwei('20'),
+  maxPriorityFeePerGas: parseGwei('1')
+})
+```
+
+### Scheduled Payments
+
+Set validity windows for transactions:
+
+```typescript
+const now = Math.floor(Date.now() / 1000)
+const oneHourLater = now + 3600
+
+const hash = await wallet.sendTransaction({
+  type: tempoTransactionType,
+  calls: [/* payment calls */],
+  validAfter: now,
+  validBefore: oneHourLater,
+  maxFeePerGas: parseGwei('20'),
+  maxPriorityFeePerGas: parseGwei('1')
+})
+```
+
+## Chain Configuration
+
+The SDK includes pre-configured chain definitions:
+
+```typescript
+import { tempoTestnet, tempoMainnet } from 'tempo-viem/chains'
+
+// Testnet (Moderato)
+console.log(tempoTestnet)
+// {
+//   id: 42431,
+//   name: 'Tempo Testnet',
+//   network: 'tempo-testnet',
+//   nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 6 },
+//   rpcUrls: {
+//     default: { http: ['https://rpc.moderato.tempo.xyz'] }
+//   },
+//   blockExplorers: {
+//     default: { name: 'Tempo Explorer', url: 'https://explore.tempo.xyz' }
+//   }
+// }
+```
+
+## Available ABIs
+
+The SDK exports typed ABIs for all Tempo precompiles:
+
+```typescript
+import {
+  tip20Abi,        // TIP-20 token interface
+  tip403Abi,       // TIP-403 policy registry
+  feeAmmAbi,       // Fee AMM for stablecoin gas
+  accountAbi       // Smart account interface
+} from 'tempo-viem/abis'
+```
+
+## Error Handling
+
+Handle Tempo-specific errors:
+
+```typescript
+import { ContractFunctionExecutionError } from 'viem'
+
+try {
+  const hash = await wallet.writeContract({
+    address: tokenAddress,
+    abi: tip20Abi,
+    functionName: 'transfer',
+    args: [recipient, amount]
+  })
+} catch (error) {
+  if (error instanceof ContractFunctionExecutionError) {
+    // Handle insufficient balance, blocked address, etc.
+    console.error('Transfer failed:', error.shortMessage)
+  }
+}
+```
+
+## TypeScript Support
+
+The SDK is fully typed with automatic inference:
+
+```typescript
+// Return types are automatically inferred
+const balance: bigint = await client.readContract({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  functionName: 'balanceOf',
+  args: ['0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb']
+})
+
+// Event args are strongly typed
+client.watchContractEvent({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: tip20Abi,
+  eventName: 'Transfer',
+  onLogs: (logs) => {
+    logs.forEach((log) => {
+      // log.args.from, log.args.to, log.args.value are all typed
+    })
+  }
+})
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Integration Guide" icon="book" href="/quickstart">
+    Step-by-step integration walkthrough
+  </Card>
+  <Card title="TIP-20 Reference" icon="book-open" href="/protocol/tip20/overview">
+    Complete TIP-20 token specification
+  </Card>
+  <Card title="Account Abstraction" icon="user-gear" href="/concepts/tempo-transactions">
+    Learn about Tempo Transactions
+  </Card>
+  <Card title="Examples" icon="code" href="/guides/making-payments">
+    View complete code examples
+  </Card>
+</CardGroup>

@@ -1,0 +1,496 @@
+---
+title: TIP-403 Registry Precompile
+description: Compliance policy registry for transfer restrictions
+---
+
+The TIP-403 Registry precompile provides a centralized registry for transfer policies that control which addresses can send or receive TIP-20 tokens. This enables compliance requirements like KYC/AML whitelists and sanctions blacklists.
+
+## Address
+
+```
+0x403C000000000000000000000000000000000000
+```
+
+## Overview
+
+The registry manages policies that TIP-20 tokens can reference:
+
+- **Whitelists**: Only listed addresses are authorized
+- **Blacklists**: All addresses except listed ones are authorized  
+- **Compound Policies**: Separate sender/recipient policies (T2+)
+- **Immutability**: Policies can be created but not deleted
+
+## Interface
+
+```solidity
+interface ITIP403Registry {
+    enum PolicyType {
+        WHITELIST,
+        BLACKLIST,
+        COMPOUND  // T2+ only
+    }
+    
+    struct PolicyData {
+        PolicyType policyType;
+        address admin;
+    }
+    
+    // Policy creation
+    function createPolicy(
+        address admin,
+        PolicyType policyType
+    ) external returns (uint64 newPolicyId);
+    
+    function createPolicyWithAccounts(
+        address admin,
+        PolicyType policyType,
+        address[] calldata accounts
+    ) external returns (uint64 newPolicyId);
+    
+    // Policy management
+    function setPolicyAdmin(uint64 policyId, address admin) external;
+    
+    function modifyPolicyWhitelist(
+        uint64 policyId,
+        address account,
+        bool allowed
+    ) external;
+    
+    function modifyPolicyBlacklist(
+        uint64 policyId,
+        address account,
+        bool restricted
+    ) external;
+    
+    // View functions
+    function policyIdCounter() external view returns (uint64);
+    
+    function policyExists(uint64 policyId) external view returns (bool);
+    
+    function policyData(uint64 policyId) 
+        external view returns (PolicyType policyType, address admin);
+    
+    function isAuthorized(uint64 policyId, address user) 
+        external view returns (bool);
+    
+    // TIP-1015: Compound policies (T2+)
+    function createCompoundPolicy(
+        uint64 senderPolicyId,
+        uint64 recipientPolicyId,
+        uint64 mintRecipientPolicyId
+    ) external returns (uint64 newPolicyId);
+    
+    function isAuthorizedSender(uint64 policyId, address user) 
+        external view returns (bool);
+    
+    function isAuthorizedRecipient(uint64 policyId, address user) 
+        external view returns (bool);
+    
+    function isAuthorizedMintRecipient(uint64 policyId, address user) 
+        external view returns (bool);
+}
+```
+
+### Events
+
+```solidity
+event PolicyCreated(
+    uint64 indexed policyId,
+    address indexed updater,
+    PolicyType policyType
+);
+
+event PolicyAdminUpdated(
+    uint64 indexed policyId,
+    address indexed updater,
+    address indexed admin
+);
+
+event WhitelistUpdated(
+    uint64 indexed policyId,
+    address indexed updater,
+    address indexed account,
+    bool allowed
+);
+
+event BlacklistUpdated(
+    uint64 indexed policyId,
+    address indexed updater,
+    address indexed account,
+    bool restricted
+);
+
+event CompoundPolicyCreated(
+    uint64 indexed policyId,
+    address indexed creator,
+    uint64 senderPolicyId,
+    uint64 recipientPolicyId,
+    uint64 mintRecipientPolicyId
+);
+```
+
+### Errors
+
+```solidity
+error Unauthorized();
+error PolicyNotFound();
+error PolicyNotSimple();
+error IncompatiblePolicyType();
+error InvalidPolicyType();
+```
+
+## Built-in Policies
+
+Two special policies are always available:
+
+```solidity
+// Policy 0: Always reject
+uint64 constant ALWAYS_REJECT = 0;
+
+// Policy 1: Always allow  
+uint64 constant ALWAYS_ALLOW = 1;
+
+// Custom policies start at 2
+uint64 firstCustomPolicy = 2;
+```
+
+## Simple Policies
+
+### Creating a Whitelist
+
+```solidity
+contract Compliance {
+    ITIP403Registry constant REGISTRY = 
+        ITIP403Registry(0x403C000000000000000000000000000000000000);
+    
+    function createKYCWhitelist() external returns (uint64) {
+        // Create empty whitelist
+        uint64 policyId = REGISTRY.createPolicy(
+            msg.sender,  // admin
+            ITIP403Registry.PolicyType.WHITELIST
+        );
+        
+        // Add KYC'd addresses
+        address[] memory kycUsers = getKYCdUsers();
+        for (uint i = 0; i < kycUsers.length; i++) {
+            REGISTRY.modifyPolicyWhitelist(
+                policyId,
+                kycUsers[i],
+                true  // allowed
+            );
+        }
+        
+        return policyId;
+    }
+}
+```
+
+### Creating a Blacklist
+
+```solidity
+function createSanctionsList() external returns (uint64) {
+    // Get sanctioned addresses
+    address[] memory sanctioned = getSanctionedAddresses();
+    
+    // Create blacklist with initial accounts
+    uint64 policyId = REGISTRY.createPolicyWithAccounts(
+        msg.sender,
+        ITIP403Registry.PolicyType.BLACKLIST,
+        sanctioned
+    );
+    
+    return policyId;
+}
+```
+
+### Checking Authorization
+
+```solidity
+function isUserAuthorized(
+    uint64 policyId,
+    address user
+) public view returns (bool) {
+    return REGISTRY.isAuthorized(policyId, user);
+}
+
+// Whitelist: returns true if user is in whitelist
+// Blacklist: returns true if user is NOT in blacklist
+```
+
+## Compound Policies (T2+)
+
+Compound policies allow different rules for senders, recipients, and mint recipients:
+
+### Creating a Compound Policy
+
+```solidity
+function createVendorCreditsPolicy() external returns (uint64) {
+    // 1. Create vendor whitelist (only vendor can receive)
+    uint64 vendorWhitelist = REGISTRY.createPolicy(
+        msg.sender,
+        ITIP403Registry.PolicyType.WHITELIST
+    );
+    REGISTRY.modifyPolicyWhitelist(vendorWhitelist, vendorAddress, true);
+    
+    // 2. Create compound policy
+    // - Anyone can send (policy 1 = always allow)
+    // - Only vendor can receive transfers (vendorWhitelist)
+    // - Anyone can receive mints (policy 1 = always allow)
+    uint64 compoundId = REGISTRY.createCompoundPolicy(
+        1,               // senderPolicyId: anyone can send
+        vendorWhitelist, // recipientPolicyId: only vendor
+        1                // mintRecipientPolicyId: anyone
+    );
+    
+    return compoundId;
+}
+```
+
+### Authorization Checks
+
+```solidity
+// Check sender authorization
+bool canSend = REGISTRY.isAuthorizedSender(policyId, sender);
+
+// Check recipient authorization  
+bool canReceive = REGISTRY.isAuthorizedRecipient(policyId, recipient);
+
+// Check mint recipient authorization
+bool canReceiveMint = REGISTRY.isAuthorizedMintRecipient(policyId, recipient);
+
+// Generic check (sender AND recipient)
+bool authorized = REGISTRY.isAuthorized(policyId, user);
+```
+
+## Policy Management
+
+### Updating Policy Admin
+
+```solidity
+function transferPolicyOwnership(
+    uint64 policyId,
+    address newAdmin
+) external {
+    REGISTRY.setPolicyAdmin(policyId, newAdmin);
+    // Only current admin can call this
+}
+```
+
+### Adding/Removing from Whitelist
+
+```solidity
+function updateWhitelist(
+    uint64 policyId,
+    address user,
+    bool allowed
+) external {
+    REGISTRY.modifyPolicyWhitelist(policyId, user, allowed);
+    // Only policy admin can call this
+}
+
+// Add user
+updateWhitelist(policyId, user, true);
+
+// Remove user  
+updateWhitelist(policyId, user, false);
+```
+
+### Adding/Removing from Blacklist
+
+```solidity
+function updateBlacklist(
+    uint64 policyId,
+    address user,
+    bool restricted
+) external {
+    REGISTRY.modifyPolicyBlacklist(policyId, user, restricted);
+    // Only policy admin can call this
+}
+
+// Add to blacklist
+updateBlacklist(policyId, user, true);
+
+// Remove from blacklist
+updateBlacklist(policyId, user, false);
+```
+
+## TIP-20 Integration
+
+TIP-20 tokens reference policy IDs for transfer restrictions:
+
+```solidity
+contract TIP20Token {
+    uint64 public policyId;
+    
+    function setPolicy(uint64 newPolicyId) external onlyAdmin {
+        require(
+            REGISTRY.policyExists(newPolicyId),
+            "Policy not found"
+        );
+        policyId = newPolicyId;
+    }
+    
+    function _beforeTokenTransfer(
+        address from,
+        address to
+    ) internal view {
+        if (policyId == 0) revert("Transfers disabled");
+        if (policyId == 1) return; // No restrictions
+        
+        // Check sender authorization
+        require(
+            REGISTRY.isAuthorizedSender(policyId, from),
+            "Sender not authorized"
+        );
+        
+        // Check recipient authorization
+        require(
+            REGISTRY.isAuthorizedRecipient(policyId, to),
+            "Recipient not authorized"
+        );
+    }
+}
+```
+
+## Gas Costs
+
+| Operation | Cold | Warm |
+|-----------|------|------|
+| `createPolicy` | ~45,000 gas | ~25,000 gas |
+| `createPolicyWithAccounts` | +5,000 gas per account | +2,500 gas per account |
+| `createCompoundPolicy` | ~30,000 gas | ~15,000 gas |
+| `modifyPolicyWhitelist` | ~25,000 gas | ~10,000 gas |
+| `modifyPolicyBlacklist` | ~25,000 gas | ~10,000 gas |
+| `isAuthorized` | ~3,500 gas | ~400 gas |
+| `isAuthorizedSender` | ~3,500 gas | ~400 gas |
+
+## Storage Layout
+
+```solidity
+// Slot 0: Policy ID counter (starts at 2)
+uint64 policy_id_counter;
+
+// Slot 1: Policy records
+mapping(uint64 => PolicyRecord) policy_records;
+
+// PolicyRecord struct (packed):
+struct PolicyRecord {
+    PolicyData base;      // policy_type (u8) + admin (20 bytes)
+    CompoundPolicyData compound;  // Only for COMPOUND type
+}
+
+// Slot 2: Address sets (whitelist/blacklist)
+mapping(uint64 => mapping(address => bool)) policy_set;
+```
+
+## Use Cases
+
+### KYC/AML Compliance
+
+```solidity
+// Create KYC whitelist
+uint64 kycPolicy = REGISTRY.createPolicy(
+    complianceOfficer,
+    ITIP403Registry.PolicyType.WHITELIST
+);
+
+// Add KYC'd users
+for (address user in kycUsers) {
+    REGISTRY.modifyPolicyWhitelist(kycPolicy, user, true);
+}
+
+// Set on token
+token.setPolicy(kycPolicy);
+```
+
+### Sanctions Screening
+
+```solidity
+// Create sanctions blacklist
+uint64 sanctionsPolicy = REGISTRY.createPolicyWithAccounts(
+    complianceOfficer,
+    ITIP403Registry.PolicyType.BLACKLIST,
+    sanctionedAddresses
+);
+
+// Set on token
+token.setPolicy(sanctionsPolicy);
+```
+
+### Vendor Credits (T2+)
+
+```solidity
+// Create compound policy for vendor credits:
+// - Anyone can send (pay vendor)
+// - Only vendor can receive transfers  
+// - Anyone can receive mints (get credits)
+
+uint64 vendorPolicy = REGISTRY.createCompoundPolicy(
+    1,               // anyone can send
+    vendorWhitelist, // only vendor receives transfers
+    1                // anyone receives mints
+);
+
+token.setPolicy(vendorPolicy);
+```
+
+## Best Practices
+
+### Policy Immutability
+
+```solidity
+// ✅ Good: Plan for policy evolution
+uint64 kycPolicyV1 = createPolicy(...);
+uint64 kycPolicyV2 = createPolicy(...);  // Updated rules
+
+// Migrate token
+token.setPolicy(kycPolicyV2);
+
+// ❌ Bad: Can't delete policies
+// Policies remain in storage forever
+```
+
+### Admin Management
+
+```solidity
+// ✅ Good: Use multi-sig for admin
+address admin = multiSigWallet;
+
+// ✅ Good: Transfer admin to DAO
+REGISTRY.setPolicyAdmin(policyId, daoAddress);
+
+// ❌ Bad: Single EOA admin (key compromise risk)
+address admin = myEOA;
+```
+
+### Authorization Caching
+
+```solidity
+// ✅ Good: Cache authorization checks
+mapping(address => uint256) lastChecked;
+
+function isAuthorizedCached(address user) public returns (bool) {
+    if (block.timestamp - lastChecked[user] < 1 hours) {
+        return cachedResult[user];
+    }
+    
+    bool auth = REGISTRY.isAuthorized(policyId, user);
+    cachedResult[user] = auth;
+    lastChecked[user] = block.timestamp;
+    return auth;
+}
+```
+
+## Security Considerations
+
+- **Admin Compromise**: Policy admin can modify lists; use multi-sig
+- **Policy Immutability**: Policies can't be deleted; plan versioning
+- **Gas Costs**: Large policy updates can be expensive; batch operations
+- **Compound Policies**: Are immutable (no admin); choose sub-policies carefully
+
+## See Also
+
+- [TIP-403 Specification](/protocol/precompiles/tip403-registry)
+- [TIP-1015 Compound Policies](/protocol/tips/tip-1015)
+- [TIP-20 Token Standard](/protocol/tip20/overview)
+- [Compliance Guide](/protocol/tip20/compliance)

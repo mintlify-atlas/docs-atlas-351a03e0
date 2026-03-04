@@ -1,122 +1,169 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Tempo",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#040404",
+    "light": "#7c7c7c",
+    "dark": "#c8c8c8"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/d80c1d29-8e22-4d0e-8ecb-38281422e66d.png",
+  "logo": {
+    "light": "https://media.brand.dev/7be6d350-1fa7-465e-ba40-5c26d6cc0e73.svg",
+    "dark": "https://media.brand.dev/7be6d350-1fa7-465e-ba40-5c26d6cc0e73.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/tempoxyz/tempo"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/tempoxyz/tempo",
+      "x": "https://x.com/tempoxyz",
+      "website": "https://tempo.xyz"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/tempo-transactions",
+              "concepts/tip20-tokens",
+              "concepts/consensus",
+              "concepts/evm-compatibility"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Running a Node",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "node/installation",
+              "node/configuration",
+              "node/running",
+              "node/maintenance"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Building on Tempo",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/deploying-contracts",
+              "guides/making-payments",
+              "guides/batch-payments",
+              "guides/fee-sponsorship",
+              "guides/smart-accounts"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "sdk/overview",
+              "sdk/typescript",
+              "sdk/rust",
+              "sdk/go",
+              "sdk/foundry"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Protocol Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Transaction Types",
             "pages": [
-              "api-reference/introduction"
+              "protocol/transactions/overview",
+              "protocol/transactions/tempo-transaction",
+              "protocol/transactions/evm-transactions"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "TIP-20 Token Standard",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "protocol/tip20/overview",
+              "protocol/tip20/transfers",
+              "protocol/tip20/memos",
+              "protocol/tip20/compliance"
+            ]
+          },
+          {
+            "group": "Fee System",
+            "pages": [
+              "protocol/fees/overview",
+              "protocol/fees/gas-pricing",
+              "protocol/fees/fee-amm",
+              "protocol/fees/stablecoin-fees"
+            ]
+          },
+          {
+            "group": "Precompiles",
+            "pages": [
+              "protocol/precompiles/overview",
+              "protocol/precompiles/nonce",
+              "protocol/precompiles/account-keychain",
+              "protocol/precompiles/tip20-factory",
+              "protocol/precompiles/tip403-registry",
+              "protocol/precompiles/validator-config"
+            ]
+          },
+          {
+            "group": "TIPs (Tempo Improvement Proposals)",
+            "pages": [
+              "protocol/tips/overview",
+              "protocol/tips/tip-1000",
+              "protocol/tips/tip-1001",
+              "protocol/tips/tip-1002",
+              "protocol/tips/tip-1003",
+              "protocol/tips/tip-1004",
+              "protocol/tips/tip-1005",
+              "protocol/tips/tip-1006",
+              "protocol/tips/tip-1007",
+              "protocol/tips/tip-1009",
+              "protocol/tips/tip-1010",
+              "protocol/tips/tip-1011",
+              "protocol/tips/tip-1015",
+              "protocol/tips/tip-1016",
+              "protocol/tips/tip-1017"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "JSON-RPC Methods",
+            "pages": [
+              "api/overview",
+              "api/standard-methods",
+              "api/tempo-methods",
+              "api/admin-methods"
+            ]
+          },
+          {
+            "group": "Rust Crates",
+            "pages": [
+              "api/rust/tempo-node",
+              "api/rust/tempo-alloy",
+              "api/rust/tempo-primitives",
+              "api/rust/tempo-evm",
+              "api/rust/tempo-consensus"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

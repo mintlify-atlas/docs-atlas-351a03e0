@@ -1,0 +1,264 @@
+---
+title: 'Deploying Contracts'
+description: 'Deploy and interact with Solidity smart contracts on Tempo using Foundry or Hardhat'
+icon: 'rocket'
+---
+
+Tempo is fully EVM-compatible, supporting the same tools, frameworks, and languages you use on Ethereum. Deploy contracts using Foundry, Hardhat, or any standard Ethereum development tool.
+
+## Prerequisites
+
+Before deploying contracts, ensure you have:
+
+- A wallet with testnet funds (get them from the [Faucet](/quickstart))
+- Foundry or Hardhat installed
+- RPC endpoint: `https://rpc.moderato.tempo.xyz`
+- Chain ID: `42431`
+
+## Using Foundry
+
+Tempo works seamlessly with [Foundry](https://github.com/tempoxyz/tempo-foundry), the fast and modular toolkit for Ethereum development.
+
+### Install Foundry
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+### Create a New Project
+
+```bash
+forge init my-tempo-project
+cd my-tempo-project
+```
+
+### Write Your Contract
+
+Create a simple contract in `src/Counter.sol`:
+
+```solidity Counter.sol
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+contract Counter {
+    uint256 public count;
+
+    function increment() external returns (uint256) {
+        return ++count;
+    }
+
+    function decrement() external returns (uint256) {
+        require(count > 0, "Count is zero");
+        return --count;
+    }
+
+    function reset() external {
+        count = 0;
+    }
+}
+```
+
+### Deploy with Foundry
+
+Deploy your contract to Tempo testnet:
+
+```bash
+forge create --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY \
+  src/Counter.sol:Counter
+```
+
+<Tip>
+Store your private key in an environment variable: `export PRIVATE_KEY=0x...`
+</Tip>
+
+### Interact with Your Contract
+
+Once deployed, interact with it using `cast`:
+
+```bash
+# Read the count
+cast call $CONTRACT_ADDRESS "count()" --rpc-url https://rpc.moderato.tempo.xyz
+
+# Increment the counter
+cast send $CONTRACT_ADDRESS "increment()" \
+  --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY
+
+# Read the updated count
+cast call $CONTRACT_ADDRESS "count()" --rpc-url https://rpc.moderato.tempo.xyz
+```
+
+## Using Hardhat
+
+Hardhat is another popular Ethereum development environment that works with Tempo.
+
+### Install Hardhat
+
+```bash
+npm install --save-dev hardhat
+npx hardhat init
+```
+
+### Configure Hardhat
+
+Update `hardhat.config.js` to include Tempo testnet:
+
+```javascript hardhat.config.js
+require("@nomicfoundation/hardhat-toolbox");
+
+/** @type import('hardhat/config').HardhatUserConfig */
+module.exports = {
+  solidity: "0.8.28",
+  networks: {
+    tempo: {
+      url: "https://rpc.moderato.tempo.xyz",
+      chainId: 42431,
+      accounts: [process.env.PRIVATE_KEY]
+    }
+  }
+};
+```
+
+### Write Your Contract
+
+Create `contracts/SimpleStorage.sol`:
+
+```solidity SimpleStorage.sol
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+contract SimpleStorage {
+    uint256 public value;
+
+    constructor(uint256 _value) {
+        value = _value;
+    }
+
+    function setValue(uint256 _value) external {
+        value = _value;
+    }
+}
+```
+
+### Deploy with Hardhat
+
+Create a deployment script in `scripts/deploy.js`:
+
+```javascript deploy.js
+const hre = require("hardhat");
+
+async function main() {
+  const SimpleStorage = await hre.ethers.getContractFactory("SimpleStorage");
+  const storage = await SimpleStorage.deploy(42);
+
+  await storage.waitForDeployment();
+
+  console.log("SimpleStorage deployed to:", await storage.getAddress());
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+Run the deployment:
+
+```bash
+npx hardhat run scripts/deploy.js --network tempo
+```
+
+## Using Tempo Alloy SDK (Rust)
+
+For Rust developers, the Tempo Alloy SDK provides a native way to deploy contracts.
+
+```rust
+use alloy::{
+    primitives::Address,
+    providers::{Provider, ProviderBuilder},
+    sol_types::SolCall,
+};
+use tempo_alloy::TempoNetwork;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    // Deploy a contract by sending the creation bytecode
+    let bytecode = hex::decode("608060...")?.into();
+    
+    let tx = provider
+        .send_transaction(
+            alloy::rpc::types::TransactionRequest::default()
+                .with_deploy_code(bytecode)
+        )
+        .await?;
+    
+    let receipt = tx.get_receipt().await?;
+    let contract_address = receipt.contract_address.unwrap();
+    
+    println!("Contract deployed at: {:?}", contract_address);
+
+    Ok(())
+}
+```
+
+## Verifying Contracts
+
+Verify your deployed contracts on the Tempo block explorer:
+
+```bash
+forge verify-contract $CONTRACT_ADDRESS \
+  src/Counter.sol:Counter \
+  --chain 42431 \
+  --etherscan-api-key $API_KEY
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Gas Efficiency" icon="gas-pump">
+    Optimize for TIP-20 transfers which have dedicated payment lanes and lower fees
+  </Card>
+  <Card title="Use TIP-20" icon="coins">
+    Leverage Tempo's native TIP-20 standard for stablecoin operations
+  </Card>
+  <Card title="Test Thoroughly" icon="vial">
+    Use the testnet extensively before deploying to production
+  </Card>
+  <Card title="Monitor Gas" icon="chart-line">
+    Gas prices are in stablecoins - track costs in USD terms
+  </Card>
+</CardGroup>
+
+## Tempo-Specific Features
+
+When building on Tempo, you can leverage additional features:
+
+- **TIP-20 Precompiles**: Access native stablecoin functions at `0x20c0...` addresses
+- **Memos**: Add reconciliation data to token transfers
+- **Tempo Transactions**: Use batched calls and fee sponsorship
+- **Account Keychain**: Implement passkey-based authentication
+
+See the other guides in this section to learn how to use these features.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Making Payments" icon="money-bill-transfer" href="/guides/making-payments">
+    Send TIP-20 stablecoin payments with memos
+  </Card>
+  <Card title="Batch Payments" icon="layer-group" href="/guides/batch-payments">
+    Execute multiple payments atomically
+  </Card>
+  <Card title="Fee Sponsorship" icon="hand-holding-dollar" href="/guides/fee-sponsorship">
+    Pay gas fees for your users
+  </Card>
+  <Card title="Smart Accounts" icon="key" href="/guides/smart-accounts">
+    Enable passkey authentication
+  </Card>
+</CardGroup>

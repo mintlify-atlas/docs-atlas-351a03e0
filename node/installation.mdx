@@ -1,0 +1,331 @@
+---
+title: Installation
+description: Install Tempo node software using pre-built binaries, build from source, or Docker
+---
+
+Tempo provides three installation methods: pre-built binaries for quick setup, building from source for customization, or Docker for containerized deployments.
+
+## System Requirements
+
+Before installing Tempo, ensure your system meets these requirements:
+
+- **Operating System**: Linux (Ubuntu 20.04+, Debian 11+) or macOS
+- **CPU**: 4+ cores recommended
+- **RAM**: 8GB minimum, 16GB+ recommended
+- **Storage**: 500GB+ SSD for full node (subject to growth)
+- **Network**: Stable internet connection with open ports
+
+## Pre-built Binary
+
+The fastest way to get started with Tempo is using the official installer:
+
+```bash
+curl -L https://tempo.xyz/install | bash
+```
+
+This will:
+- Download the latest Tempo binary for your platform
+- Install it to `~/.tempo/bin/`
+- Add Tempo to your PATH
+
+After installation, verify it works:
+
+```bash
+tempo --version
+```
+
+### Manual Binary Installation
+
+If you prefer manual installation:
+
+1. Download the latest release for your platform from the [Tempo releases page](https://github.com/tempoxyz/tempo/releases)
+
+2. Extract and move the binary:
+
+```bash
+tar -xzf tempo-*.tar.gz
+sudo mv tempo /usr/local/bin/
+chmod +x /usr/local/bin/tempo
+```
+
+3. Verify the installation:
+
+```bash
+tempo --version
+```
+
+## Build from Source
+
+Building from source gives you the latest features and allows customization.
+
+### Prerequisites
+
+Install the required dependencies:
+
+- **Rust**: Version 1.93.0 or later
+- **just**: Build automation tool
+- **Git**: For cloning the repository
+
+#### Install Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+```
+
+#### Install Just
+
+```bash
+cargo install just
+```
+
+### Build Steps
+
+1. Clone the Tempo repository:
+
+```bash
+git clone https://github.com/tempoxyz/tempo
+cd tempo
+```
+
+2. Install dependencies:
+
+```bash
+just
+```
+
+3. Build the Tempo node:
+
+```bash
+just build-all
+```
+
+This compiles all binaries including:
+- `tempo` - The main node binary
+- `tempo-sidecar` - Sidecar services
+- `tempo-bench` - Benchmarking tools
+
+4. The compiled binary will be in `target/release/tempo`. You can move it to your PATH:
+
+```bash
+sudo cp target/release/tempo /usr/local/bin/
+```
+
+### Build Profiles
+
+Tempo supports different build profiles:
+
+- **Development** (default): Faster compilation, includes debug info
+  ```bash
+  cargo build --bin tempo
+  ```
+
+- **Release**: Optimized for production
+  ```bash
+  cargo build --bin tempo --release
+  ```
+
+- **Profiling**: Optimized with debug symbols
+  ```bash
+  cargo build --bin tempo --profile profiling
+  ```
+
+### Build Features
+
+Customize your build with features:
+
+```bash
+cargo build --bin tempo --release --features "asm-keccak,jemalloc,otlp"
+```
+
+Available features:
+- `asm-keccak`: Assembly-optimized keccak hashing (faster)
+- `jemalloc`: Use jemalloc memory allocator (better performance)
+- `jemalloc-prof`: Enable jemalloc profiling
+- `otlp`: Enable OpenTelemetry Protocol for observability
+- `js-tracer`: Enable JavaScript transaction tracing
+- `tracy`: Enable Tracy profiler integration
+- `pyroscope`: Enable Pyroscope continuous profiling
+
+Default features: `asm-keccak`, `jemalloc`, `otlp`
+
+## Docker
+
+Docker provides a containerized environment for running Tempo.
+
+### Using Pre-built Images
+
+Pull the official Tempo image:
+
+```bash
+docker pull ghcr.io/tempoxyz/tempo:latest
+```
+
+Run a Tempo node:
+
+```bash
+docker run -d \
+  --name tempo-node \
+  -p 30303:30303 \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -v tempo-data:/data \
+  ghcr.io/tempoxyz/tempo:latest \
+  node \
+  --chain moderato \
+  --datadir /data \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546
+```
+
+### Building Docker Image
+
+To build your own Docker image:
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/tempoxyz/tempo
+cd tempo
+```
+
+2. Build the Docker image:
+
+```bash
+docker build -t tempo:custom \
+  --build-arg RUST_PROFILE=release \
+  --build-arg RUST_FEATURES="asm-keccak,jemalloc,otlp" \
+  --target tempo \
+  .
+```
+
+3. Run your custom image:
+
+```bash
+docker run -d \
+  --name tempo-node \
+  -p 30303:30303 \
+  -p 8545:8545 \
+  -v tempo-data:/data \
+  tempo:custom \
+  node --chain moderato --datadir /data
+```
+
+### Docker Compose
+
+For easier management, use Docker Compose:
+
+```yaml docker-compose.yml
+services:
+  tempo:
+    image: ghcr.io/tempoxyz/tempo:latest
+    container_name: tempo-node
+    ports:
+      - "30303:30303"  # P2P
+      - "8545:8545"    # HTTP RPC
+      - "8546:8546"    # WebSocket RPC
+    volumes:
+      - tempo-data:/data
+    command: |
+      node
+      --chain moderato
+      --datadir /data
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --ws --ws.addr 0.0.0.0 --ws.port 8546
+    restart: unless-stopped
+
+volumes:
+  tempo-data:
+```
+
+Start the node:
+
+```bash
+docker compose up -d
+```
+
+## Verify Installation
+
+Regardless of installation method, verify your node is working:
+
+```bash
+# Check version
+tempo --version
+
+# View help
+tempo --help
+
+# Test node startup (will exit quickly without full config)
+tempo node --chain moderato --help
+```
+
+## Next Steps
+
+After installation:
+
+1. [Configure your node](/node/configuration) - Set up networking, storage, and consensus
+2. [Run your node](/node/running) - Connect to testnet or mainnet
+3. [Maintain your node](/node/maintenance) - Keep it updated and healthy
+
+## Uninstalling
+
+### Binary Installation
+
+Remove the Tempo binary:
+
+```bash
+rm -rf ~/.tempo
+# Remove from PATH in ~/.zshrc, ~/.bashrc, or equivalent
+```
+
+### Docker
+
+Stop and remove containers:
+
+```bash
+docker stop tempo-node
+docker rm tempo-node
+docker rmi ghcr.io/tempoxyz/tempo:latest
+docker volume rm tempo-data
+```
+
+## Troubleshooting
+
+### Build Failures
+
+If you encounter build errors:
+
+```bash
+# Clean build artifacts
+cargo clean
+
+# Update Rust
+rustup update
+
+# Rebuild
+cargo build --bin tempo --release
+```
+
+### Permission Errors
+
+If you get permission errors:
+
+```bash
+# Make binary executable
+chmod +x /path/to/tempo
+
+# Or use sudo for system-wide installation
+sudo mv tempo /usr/local/bin/
+```
+
+### Docker Issues
+
+If Docker fails to start:
+
+```bash
+# Check logs
+docker logs tempo-node
+
+# Verify port availability
+sudo netstat -tulpn | grep -E '(8545|8546|30303)'
+```

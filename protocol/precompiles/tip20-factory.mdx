@@ -1,0 +1,367 @@
+---
+title: TIP-20 Factory Precompile
+description: Deploy TIP-20 tokens at deterministic addresses
+---
+
+The TIP-20 Factory precompile provides a standardized way to deploy TIP-20 compliant tokens at deterministic addresses. It ensures proper initialization and maintains a registry of deployed tokens.
+
+## Address
+
+```
+0x20FC000000000000000000000000000000000000
+```
+
+## Overview
+
+The factory enables:
+
+- **Deterministic Deployment**: Predict token addresses before deployment
+- **CREATE2-style Addressing**: Uses sender + salt for address derivation
+- **Token Registry**: Check if an address is a valid TIP-20 token
+- **Reserved Addresses**: First 1024 addresses reserved for protocol tokens
+
+## Interface
+
+```solidity
+interface ITIP20Factory {
+    function createToken(
+        string memory name,
+        string memory symbol,
+        string memory currency,
+        ITIP20 quoteToken,
+        address admin,
+        bytes32 salt
+    ) external returns (address);
+    
+    function isTIP20(address token) external view returns (bool);
+    
+    function getTokenAddress(address sender, bytes32 salt) 
+        external pure returns (address);
+}
+```
+
+### Events
+
+```solidity
+event TokenCreated(
+    address indexed token,
+    string name,
+    string symbol,
+    string currency,
+    ITIP20 quoteToken,
+    address admin,
+    bytes32 salt
+);
+```
+
+### Errors
+
+```solidity
+error AddressReserved();
+error InvalidQuoteToken();
+error TokenAlreadyExists(address tokenAddress);
+```
+
+## Token Addresses
+
+TIP-20 tokens are deployed with a special address prefix:
+
+```
+0x20C0 + keccak256(sender, salt)[0:8]
+```
+
+### Address Structure
+
+```
+TIP-20 Address (20 bytes):
+  [0:12]  = 0x20C000000000000000000000  (prefix)
+  [12:20] = keccak256(sender, salt)[0:8]  (deterministic bytes)
+```
+
+### Reserved Range
+
+The first 1024 addresses are reserved for protocol tokens:
+
+```
+0x20C0000000000000000000000000000000000000  (pathUSD)
+0x20C0000000000000000000000000000000000001
+...
+0x20C00000000000000000000000000000000003FF  (1023)
+```
+
+User-deployed tokens must have addresses >= 0x400 (1024).
+
+## Creating Tokens
+
+### Basic Token Creation
+
+```solidity
+contract TokenDeployer {
+    ITIP20Factory constant FACTORY = 
+        ITIP20Factory(0x20FC000000000000000000000000000000000000);
+    
+    function deployToken() external returns (address) {
+        // PathUSD as quote token
+        address pathUSD = 0x20C0000000000000000000000000000000000000;
+        
+        address token = FACTORY.createToken(
+            "My USD Token",          // name
+            "MUSD",                  // symbol
+            "USD",                   // currency
+            ITIP20(pathUSD),         // quoteToken
+            msg.sender,              // admin
+            keccak256("my-salt-v1")  // salt
+        );
+        
+        return token;
+    }
+}
+```
+
+### Predicting Token Address
+
+```solidity
+function predictAddress(bytes32 salt) public view returns (address) {
+    return FACTORY.getTokenAddress(msg.sender, salt);
+}
+
+function deployAtPredictedAddress() external {
+    bytes32 salt = keccak256("my-salt");
+    
+    // Predict address
+    address predicted = predictAddress(salt);
+    
+    // Deploy token
+    address actual = FACTORY.createToken(
+        "Test", "TEST", "USD", ITIP20(pathUSD), msg.sender, salt
+    );
+    
+    require(predicted == actual, "Address mismatch");
+}
+```
+
+### TypeScript Usage
+
+```typescript
+import { encodePacked, keccak256 } from 'viem'
+
+function computeTokenAddress(sender: Address, salt: Hex): Address {
+  const hash = keccak256(encodePacked(['address', 'bytes32'], [sender, salt]))
+  const prefix = '0x20C000000000000000000000'
+  const suffix = hash.slice(2, 18) // First 8 bytes
+  return (prefix + suffix) as Address
+}
+
+// Predict address
+const salt = keccak256(toHex('my-token-v1'))
+const predicted = computeTokenAddress(deployer, salt)
+
+// Deploy token
+const actual = await factory.write.createToken([
+  'My Token',
+  'MTK',
+  'USD',
+  pathUSD,
+  admin,
+  salt
+])
+
+console.assert(actual === predicted)
+```
+
+## Quote Tokens
+
+Every TIP-20 token must specify a quote token for price reference:
+
+### Rules
+
+1. Quote token must be a deployed TIP-20 token
+2. USD tokens must have USD quote tokens
+3. pathUSD (first token) uses `address(0)` as quote
+
+```solidity
+// ✅ Valid: USD token with USD quote
+FACTORY.createToken(
+    "My USD Token", "MUSD", "USD",
+    ITIP20(pathUSD),  // pathUSD is USD
+    admin, salt
+);
+
+// ✅ Valid: EUR token with USD quote
+FACTORY.createToken(
+    "My EUR Token", "MEUR", "EUR",
+    ITIP20(pathUSD),  // USD quote ok for EUR token
+    admin, salt
+);
+
+// ❌ Invalid: USD token with EUR quote
+FACTORY.createToken(
+    "My USD Token", "MUSD", "USD",
+    ITIP20(eurToken),  // EUR quote not allowed for USD token
+    admin, salt
+);
+```
+
+## Token Validation
+
+### Checking if Address is TIP-20
+
+```solidity
+function isValidToken(address token) public view returns (bool) {
+    return FACTORY.isTIP20(token);
+}
+
+function requireValidToken(address token) internal view {
+    require(FACTORY.isTIP20(token), "Not a TIP-20 token");
+}
+```
+
+The `isTIP20` function checks:
+
+1. Address has TIP-20 prefix (`0x20C0...`)
+2. Address has deployed code (not empty)
+
+```solidity
+// Returns true only if:
+// - Has prefix 0x20C0...
+// - Has code deployed
+function isTIP20(address token) external view returns (bool) {
+    return hasPrefix(token) && hasCode(token);
+}
+```
+
+## Reserved Token Deployment
+
+Protocol tokens (like pathUSD) are deployed using the internal `create_token_reserved_address` function:
+
+```rust
+// Only callable during genesis or hardforks
+pub fn create_token_reserved_address(
+    &mut self,
+    address: Address,
+    name: &str,
+    symbol: &str,
+    currency: &str,
+    quote_token: Address,
+    admin: Address,
+) -> Result<Address>
+```
+
+This is not exposed in the ABI and can only be called internally by the protocol.
+
+## Gas Costs
+
+| Operation | Cost |
+|-----------|------|
+| `createToken` | ~250,000 gas |
+| `isTIP20` | ~2,500 gas (cold) / ~300 gas (warm) |
+| `getTokenAddress` | ~1,000 gas (pure computation) |
+
+<Note>
+  Token deployment cost includes initializing the TIP-20 precompile storage.
+</Note>
+
+## Error Handling
+
+### Address Reserved
+
+```solidity
+try FACTORY.createToken(...) {
+    // success
+} catch (bytes memory err) {
+    if (bytes4(err) == ITIP20Factory.AddressReserved.selector) {
+        // Address in reserved range (< 1024)
+        // Try different salt
+    }
+}
+```
+
+### Token Already Exists
+
+```solidity
+try FACTORY.createToken(...) {
+    // success  
+} catch (bytes memory err) {
+    if (bytes4(err) == ITIP20Factory.TokenAlreadyExists.selector) {
+        // Token already deployed at this address
+        // Either:
+        // 1. Same sender + salt used before
+        // 2. Collision (extremely unlikely)
+    }
+}
+```
+
+### Invalid Quote Token
+
+```solidity
+try FACTORY.createToken(...) {
+    // success
+} catch (bytes memory err) {
+    if (bytes4(err) == ITIP20Factory.InvalidQuoteToken.selector) {
+        // Quote token is not a valid TIP-20
+        // Or USD token with non-USD quote
+    }
+}
+```
+
+## Best Practices
+
+### Salt Selection
+
+```typescript
+// ✅ Good: Descriptive, versioned salts
+const salt = keccak256(toHex('myproject-usdc-v1'))
+
+// ✅ Good: Include metadata in salt
+const salt = keccak256(
+  encodePacked(
+    ['string', 'string', 'uint256'],
+    ['myproject', 'usdc', timestamp]
+  )
+)
+
+// ❌ Bad: Random salt (can't reproduce)
+const salt = keccak256(toHex(Math.random().toString()))
+```
+
+### Address Prediction
+
+```typescript
+// Always verify predicted address
+const predicted = await factory.read.getTokenAddress([sender, salt])
+const actual = await factory.write.createToken([...])
+assert(predicted === actual, 'Address mismatch')
+```
+
+### Quote Token Validation
+
+```solidity
+// Validate quote token before deployment
+require(
+    FACTORY.isTIP20(quoteToken),
+    "Invalid quote token"
+);
+
+address token = FACTORY.createToken(
+    name, symbol, currency,
+    ITIP20(quoteToken),
+    admin, salt
+);
+```
+
+## Storage Layout
+
+The factory has no persistent storage (stateless). Token state is stored in individual token precompiles.
+
+## Security Considerations
+
+- **Salt Reuse**: Same sender + salt = same address; can't redeploy
+- **Address Collisions**: Extremely unlikely (8 bytes of hash)
+- **Quote Token Trust**: Deployer must verify quote token is correct
+- **Reserved Range**: Cannot deploy to addresses < 1024
+
+## See Also
+
+- [TIP-20 Token Standard](/protocol/tip20/overview)
+- [TIP-403 Compliance](/protocol/precompiles/tip403-registry)
+- [Token Deployment Guide](/protocol/precompiles/tip20-factory)

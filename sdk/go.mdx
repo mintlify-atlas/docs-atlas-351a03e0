@@ -1,0 +1,494 @@
+---
+title: Go SDK
+description: Build backend services on Tempo with Go
+---
+
+The Go SDK provides Go bindings for building payment applications, backend services, and integrations with Tempo. It offers full support for TIP-20 tokens, batch payments, and Tempo's account abstraction features.
+
+<Note>
+  The Go SDK is currently under development. Check the [Tempo repository](https://github.com/tempoxyz/tempo) for the latest updates.
+</Note>
+
+## Installation
+
+Install the Go SDK:
+
+```bash
+go get github.com/tempoxyz/tempo/sdk/go
+```
+
+## Quick Start
+
+### Configure Client
+
+Connect to Tempo testnet:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    
+    "github.com/tempoxyz/tempo/sdk/go"
+)
+
+func main() {
+    client, err := tempo.Dial("https://rpc.moderato.tempo.xyz")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    blockNumber, err := client.BlockNumber(context.Background())
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    log.Printf("Current block: %d", blockNumber)
+}
+```
+
+### Get Token Balance
+
+Query TIP-20 token balances:
+
+```go
+import (
+    "context"
+    "math/big"
+    
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/tempoxyz/tempo/sdk/go/contracts"
+)
+
+tokenAddress := common.HexToAddress("0x20c0000000000000000000000000000000000001")
+token, err := contracts.NewTIP20(tokenAddress, client)
+if err != nil {
+    log.Fatal(err)
+}
+
+balance, err := token.BalanceOf(
+    nil, // call options
+    common.HexToAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Printf("Balance: %s", balance.String())
+```
+
+### Send Transfer
+
+Send a TIP-20 token transfer:
+
+```go
+import (
+    "crypto/ecdsa"
+    
+    "github.com/ethereum/go-ethereum/accounts/abi/bind"
+    "github.com/ethereum/go-ethereum/crypto"
+)
+
+// Load private key
+privateKey, err := crypto.HexToECDSA("your-private-key")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Create transactor
+auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(42431))
+if err != nil {
+    log.Fatal(err)
+}
+
+// Send transfer
+tx, err := token.Transfer(
+    auth,
+    common.HexToAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+    big.NewInt(100000000), // 100 tokens (6 decimals)
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Printf("Transaction sent: %s", tx.Hash().Hex())
+
+// Wait for receipt
+receipt, err := bind.WaitMined(context.Background(), client, tx)
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Printf("Transaction mined in block %d", receipt.BlockNumber)
+```
+
+## TIP-20 Tokens
+
+### Transfer with Memo
+
+Include reconciliation data:
+
+```go
+memo := [32]byte{}
+copy(memo[:], []byte("INV-12345"))
+
+tx, err := token.TransferWithMemo(
+    auth,
+    recipient,
+    amount,
+    memo,
+)
+```
+
+### Watch Transfer Events
+
+Listen for incoming transfers:
+
+```go
+import (
+    "github.com/ethereum/go-ethereum/accounts/abi/bind"
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// Create watch options
+watchOpts := &bind.WatchOpts{
+    Context: context.Background(),
+}
+
+// Watch for transfers
+events := make(chan *contracts.TIP20Transfer)
+sub, err := token.WatchTransfer(watchOpts, events, nil, nil)
+if err != nil {
+    log.Fatal(err)
+}
+defer sub.Unsubscribe()
+
+for {
+    select {
+    case err := <-sub.Err():
+        log.Fatal(err)
+    case transfer := <-events:
+        log.Printf("Transfer: %s -> %s: %s",
+            transfer.From.Hex(),
+            transfer.To.Hex(),
+            transfer.Value.String(),
+        )
+    }
+}
+```
+
+### Filter Historical Transfers
+
+Query past transfer events:
+
+```go
+// Create filter options
+filterOpts := &bind.FilterOpts{
+    Start: 0,
+    End:   nil, // latest block
+}
+
+// Filter transfers to a specific address
+recipient := common.HexToAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb")
+iter, err := token.FilterTransfer(
+    filterOpts,
+    nil,         // any sender
+    []common.Address{recipient}, // specific recipient
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer iter.Close()
+
+for iter.Next() {
+    log.Printf("Block %d: %s tokens",
+        iter.Event.Raw.BlockNumber,
+        iter.Event.Value.String(),
+    )
+}
+```
+
+## Batch Payments
+
+Send multiple transfers atomically using Tempo Transactions:
+
+```go
+import (
+    "github.com/tempoxyz/tempo/sdk/go/types"
+)
+
+// Create batch of calls
+calls := []types.Call{
+    {
+        To:    tokenAddress,
+        Data:  encodeTransfer(recipient1, amount1),
+        Value: big.NewInt(0),
+    },
+    {
+        To:    tokenAddress,
+        Data:  encodeTransfer(recipient2, amount2),
+        Value: big.NewInt(0),
+    },
+}
+
+// Create Tempo Transaction
+tx := types.NewTempoTransaction(
+    auth.From,
+    calls,
+    auth.Nonce,
+    auth.GasLimit,
+    auth.GasFeeCap,
+    auth.GasTipCap,
+)
+
+// Sign and send
+signedTx, err := auth.Signer(auth.From, tx)
+if err != nil {
+    log.Fatal(err)
+}
+
+err = client.SendTransaction(context.Background(), signedTx)
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Printf("Batch transaction sent: %s", signedTx.Hash().Hex())
+```
+
+## Account Abstraction
+
+### Fee Sponsorship
+
+Pay gas fees for users:
+
+```go
+tx := types.NewTempoTransaction(
+    userAddress,
+    calls,
+    nonce,
+    gasLimit,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+)
+
+// Set fee token for sponsor
+tx.SetFeeToken(tokenAddress)
+
+// Sponsor signs the transaction
+signedTx, err := sponsorAuth.Signer(sponsorAuth.From, tx)
+if err != nil {
+    log.Fatal(err)
+}
+
+err = client.SendTransaction(context.Background(), signedTx)
+```
+
+### Scheduled Payments
+
+Set validity windows:
+
+```go
+import "time"
+
+now := uint64(time.Now().Unix())
+oneHourLater := now + 3600
+
+tx := types.NewTempoTransaction(
+    auth.From,
+    calls,
+    nonce,
+    gasLimit,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+)
+
+tx.SetValidAfter(now)
+tx.SetValidBefore(oneHourLater)
+```
+
+## Network Configuration
+
+Configure for Tempo testnet:
+
+```go
+import (
+    "github.com/ethereum/go-ethereum/ethclient"
+    "github.com/ethereum/go-ethereum/rpc"
+)
+
+const (
+    TempoTestnetChainID = 42431
+    TempoTestnetRPC     = "https://rpc.moderato.tempo.xyz"
+    TempoTestnetWSS     = "wss://rpc.moderato.tempo.xyz"
+)
+
+// HTTP connection
+client, err := ethclient.Dial(TempoTestnetRPC)
+
+// WebSocket connection for subscriptions
+clientWS, err := ethclient.Dial(TempoTestnetWSS)
+```
+
+## Error Handling
+
+Handle common errors:
+
+```go
+import (
+    "errors"
+    
+    "github.com/ethereum/go-ethereum/accounts/abi"
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+tx, err := token.Transfer(auth, recipient, amount)
+if err != nil {
+    // Check for specific errors
+    if errors.Is(err, abi.ErrInvalidData) {
+        log.Printf("Invalid transaction data: %v", err)
+    } else {
+        log.Printf("Transfer failed: %v", err)
+    }
+    return
+}
+
+receipt, err := bind.WaitMined(ctx, client, tx)
+if err != nil {
+    log.Fatal(err)
+}
+
+if receipt.Status == types.ReceiptStatusFailed {
+    log.Printf("Transaction failed on-chain: %s", tx.Hash().Hex())
+}
+```
+
+## Testing with Localnet
+
+Connect to a local Tempo node:
+
+```go
+// Connect to localnet
+client, err := tempo.Dial("http://localhost:8545")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use test accounts
+testKey, _ := crypto.HexToECDSA("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+auth, _ := bind.NewKeyedTransactorWithChainID(testKey, big.NewInt(42431))
+```
+
+## Contract Bindings
+
+Generate Go bindings for custom contracts:
+
+```bash
+abigen --abi MyContract.abi --pkg contracts --type MyContract --out my_contract.go
+```
+
+For Tempo precompiles, use the built-in bindings:
+
+```go
+import "github.com/tempoxyz/tempo/sdk/go/contracts"
+
+// TIP-20 token
+token, err := contracts.NewTIP20(address, client)
+
+// TIP-403 policy registry
+policy, err := contracts.NewTIP403(address, client)
+
+// Fee AMM
+feeAmm, err := contracts.NewFeeAMM(address, client)
+```
+
+## Production Considerations
+
+### Connection Pooling
+
+Reuse clients across requests:
+
+```go
+var globalClient *ethclient.Client
+
+func init() {
+    var err error
+    globalClient, err = ethclient.Dial(TempoTestnetRPC)
+    if err != nil {
+        panic(err)
+    }
+}
+```
+
+### Transaction Management
+
+Manage nonces for concurrent transactions:
+
+```go
+import "sync"
+
+type NonceManager struct {
+    mu    sync.Mutex
+    nonce uint64
+}
+
+func (nm *NonceManager) NextNonce() uint64 {
+    nm.mu.Lock()
+    defer nm.mu.Unlock()
+    nonce := nm.nonce
+    nm.nonce++
+    return nonce
+}
+```
+
+### Monitoring
+
+Track transaction status:
+
+```go
+import "time"
+
+func waitForConfirmations(ctx context.Context, client *ethclient.Client, txHash common.Hash, confirmations uint64) error {
+    ticker := time.NewTicker(time.Second)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case <-ticker.C:
+            receipt, err := client.TransactionReceipt(ctx, txHash)
+            if err != nil {
+                continue
+            }
+            
+            currentBlock, err := client.BlockNumber(ctx)
+            if err != nil {
+                continue
+            }
+            
+            if currentBlock-receipt.BlockNumber.Uint64() >= confirmations {
+                return nil
+            }
+        }
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Go Ethereum Docs" icon="book" href="https://geth.ethereum.org/docs/developers/dapp-developer/native">
+    Learn go-ethereum basics
+  </Card>
+  <Card title="TIP-20 Reference" icon="coins" href="/protocol/tip20/overview">
+    Complete TIP-20 specification
+  </Card>
+  <Card title="Tempo Transactions" icon="file-lines" href="/concepts/tempo-transactions">
+    Account abstraction features
+  </Card>
+  <Card title="Repository" icon="github" href="https://github.com/tempoxyz/tempo">
+    View source code on GitHub
+  </Card>
+</CardGroup>

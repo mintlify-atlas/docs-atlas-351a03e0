@@ -1,0 +1,310 @@
+---
+title: tempo-node
+description: Core Tempo node implementation built on Reth SDK
+---
+
+The `tempo-node` crate provides the core node implementation for Tempo, built on the [Reth SDK](https://github.com/paradigmxyz/reth). It includes node configuration, RPC implementation, telemetry, and integration with Tempo's consensus and EVM layers.
+
+## Installation
+
+```toml
+[dependencies]
+tempo-node = "0.1.0"
+```
+
+## Core Types
+
+### TempoNode
+
+The main node type that implements Reth's `NodeTypes` trait with Tempo-specific primitives.
+
+```rust
+use tempo_node::node::TempoNode;
+
+// TempoNode defines:
+// - Primitives: TempoPrimitives (blocks, headers, transactions, receipts)
+// - ChainSpec: TempoChainSpec
+// - StateCommitment: StateRoot
+```
+
+**Source:** `crates/node/src/node.rs`
+
+### TempoFullNode
+
+Type alias for a fully launched Tempo node with all add-ons.
+
+```rust
+use tempo_node::TempoFullNode;
+
+// Type alias for:
+// FullNode<TempoNodeAdapter, TempoAddOns<TempoNodeAdapter>>
+```
+
+**Source:** `crates/node/src/lib.rs:26-29`
+
+## RPC Implementation
+
+### TempoEthApi
+
+Tempo's implementation of the Ethereum JSON-RPC API with Tempo-specific behavior.
+
+```rust
+use tempo_node::rpc::TempoEthApi;
+
+// Key features:
+// - Returns placeholder for eth_getBalance (native currency not used)
+// - Handles 2D nonces for AA transactions
+// - Routes subblock transactions to validators
+// - Gas estimation for fee tokens
+```
+
+**Key Methods:**
+
+- `balance()` - Returns `NATIVE_BALANCE_PLACEHOLDER`
+- `caller_gas_allowance()` - Calculates gas limit based on fee token balance
+- `create_txn_env()` - Handles 2D nonce resolution
+- `send_transaction()` - Routes subblock transactions to validators
+
+**Source:** `crates/node/src/rpc/mod.rs:80-507`
+
+### Admin API
+
+Administrative RPC methods for node operators.
+
+```rust
+use tempo_node::rpc::{TempoAdminApi, TempoAdminApiServer};
+use alloy_primitives::B256;
+
+// Create admin API
+let validator_key = Some(B256::from([1u8; 32]));
+let admin = TempoAdminApi::new(validator_key);
+
+// Returns validator key
+let key = admin.validator_key().await?;
+```
+
+**Methods:**
+- `admin_validatorKey` - Returns the node's validator public key
+
+**Source:** `crates/node/src/rpc/admin.rs:1-35`
+
+### Consensus RPC
+
+Query consensus state, finalization events, and network identity transitions.
+
+```rust
+use tempo_node::rpc::consensus::{
+    TempoConsensusRpc, TempoConsensusApiServer,
+    Query, ConsensusState, CertifiedBlock
+};
+
+// Create consensus RPC (requires ConsensusFeed impl)
+let consensus = TempoConsensusRpc::new(feed);
+
+// Get latest finalization
+let block = consensus.get_finalization(Query::Latest).await?;
+
+// Get consensus state
+let state = consensus.get_latest().await?;
+
+// Subscribe to events
+consensus.subscribe_events(sink).await?;
+
+// Get identity transition proofs
+let proof = consensus.get_identity_transition_proof(
+    Some(epoch),
+    false // only most recent transition
+).await?;
+```
+
+**Methods:**
+- `consensus_getFinalization` - Get finalization by height or latest
+- `consensus_getLatest` - Get current consensus state snapshot  
+- `consensus_subscribe` - Subscribe to consensus events
+- `consensus_getIdentityTransitionProof` - Get DKG identity transition proofs
+
+**Source:** `crates/node/src/rpc/consensus/mod.rs:1-122`
+
+### Token RPC
+
+Query TIP-20 token data and role history.
+
+```rust
+use tempo_node::rpc::token::{TempoToken, TempoTokenApiServer};
+
+// Create token API
+let token_api = TempoToken::new(eth_api);
+
+// Get tokens (paginated)
+let tokens = token_api.tokens(params).await?;
+
+// Get tokens by address
+let addr_tokens = token_api.tokens_by_address(params).await?;
+
+// Get role history
+let history = token_api.role_history(params).await?;
+```
+
+**Methods:**
+- `token_getTokens` - Get paginated list of TIP-20 tokens
+- `token_getTokensByAddress` - Get tokens for an address
+- `token_getRoleHistory` - Get role change history
+
+<Note>
+Token RPC methods are currently unimplemented stubs.
+</Note>
+
+**Source:** `crates/node/src/rpc/token/mod.rs:1-85`
+
+## Node Configuration
+
+### TempoNodeArgs
+
+Command-line arguments for Tempo node configuration.
+
+```rust
+use tempo_node::node::TempoNodeArgs;
+
+// Includes:
+// - Validator configuration
+// - RPC settings  
+// - Network parameters
+// - Database paths
+```
+
+### TempoPoolBuilder
+
+Custom transaction pool builder for Tempo's AA transactions.
+
+```rust
+use tempo_node::node::TempoPoolBuilder;
+
+// Implements PoolBuilder<Node> for Tempo
+// Handles:
+// - AA transaction validation
+// - 2D nonce tracking
+// - Validity windows (valid_before/valid_after)
+// - Fee token balance checks
+```
+
+## Telemetry
+
+Tempo includes built-in telemetry for observability.
+
+```rust
+use tempo_node::telemetry;
+
+// Initialize telemetry with OpenTelemetry
+tempo_node::telemetry::init();
+```
+
+## Version Metadata
+
+```rust
+use tempo_node::{version_metadata, init_version_metadata};
+
+// Initialize version info at build time
+init_version_metadata();
+
+// Access version info
+let version = version_metadata();
+println!("Version: {}", version.version);
+println!("Commit: {}", version.commit_hash);
+```
+
+**Source:** `crates/node/src/version.rs`
+
+## Re-exported Crates
+
+For convenience, `tempo-node` re-exports related crates:
+
+```rust
+// Re-exports
+pub use tempo_consensus as consensus;
+pub use tempo_evm as evm;
+pub use tempo_primitives as primitives;
+```
+
+## Engine API
+
+Engine API implementation for block building and consensus integration.
+
+```rust
+use tempo_node::engine;
+
+// Located in crates/node/src/engine.rs
+// Handles:
+// - Engine API RPC methods
+// - Block building coordination
+// - Payload assembly
+```
+
+## Constants
+
+### Subblock Transaction Channel Capacity
+
+```rust
+use tempo_node::rpc::SUBBLOCK_TX_CHANNEL_CAPACITY;
+
+// Channel capacity for subblock transactions: 10,000
+// High enough to prevent legitimate transactions from being evicted
+// during high-load scenarios
+```
+
+**Source:** `crates/node/src/rpc/mod.rs:78`
+
+### Native Balance Placeholder
+
+```rust
+use tempo_node::rpc::NATIVE_BALANCE_PLACEHOLDER;
+use alloy_primitives::U256;
+
+// Placeholder returned by eth_getBalance
+const PLACEHOLDER: U256 = uint!(4242424242424242424242424242424242424242424242424242424242424242424242424242_U256);
+```
+
+**Source:** `crates/node/src/rpc/mod.rs:70-71`
+
+## Example: Building a Custom Node
+
+```rust
+use tempo_node::{
+    node::{TempoNode, TempoNodeArgs, TempoPoolBuilder},
+    rpc::{TempoEthApiBuilder, TempoAdminApi, TempoConsensusRpc},
+};
+use reth_node_builder::{NodeBuilder, NodeConfig};
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    // Parse CLI args
+    let args = TempoNodeArgs::parse();
+    
+    // Build node
+    let node = NodeBuilder::new(NodeConfig::default())
+        .with_types::<TempoNode>()
+        .with_components(TempoNode::components())
+        .with_add_ons(TempoNode::add_ons(args))
+        .build()?;
+    
+    // Launch node
+    node.launch().await?;
+    
+    Ok(())
+}
+```
+
+## Features
+
+- `asm-keccak` - Use optimized assembly Keccak implementation
+- `otlp` - OpenTelemetry Protocol support
+- `js-tracer` - JavaScript tracer support for debugging
+- `jemalloc` - Use jemalloc allocator
+- `jemalloc-prof` - Enable jemalloc profiling
+- `tracy` - Tracy profiler integration
+- `min-*-logs` - Set minimum log level (error/warn/info/debug/trace)
+
+## See Also
+
+- [tempo-evm](/api/rust/tempo-evm) - EVM implementation
+- [tempo-consensus](/api/rust/tempo-consensus) - Consensus validation
+- [tempo-primitives](/api/rust/tempo-primitives) - Core primitive types

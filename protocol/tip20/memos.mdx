@@ -1,0 +1,526 @@
+---
+title: "Transfer Memos"
+description: "On-chain payment references for reconciliation and coordination"
+---
+
+TIP-20 transfer memos enable attaching 32-byte references to token transfers, providing native support for invoice tracking, payment reconciliation, and multi-party coordination.
+
+## Overview
+
+Memos are 32-byte values attached to transfers and emitted as indexed events:
+
+```solidity
+event TransferWithMemo(
+    address indexed from,
+    address indexed to,
+    uint256 amount,
+    bytes32 indexed memo
+);
+```
+
+**Key properties:**
+- Stored on-chain as event logs (not state)
+- All three parameters (`from`, `to`, `memo`) are indexed
+- Efficient filtering by sender, recipient, or memo hash
+- Does not increase state size
+- Minimal gas overhead (~5,000 gas)
+
+## Transfer Methods
+
+### Transfer With Memo
+
+Transfer tokens with an attached memo:
+
+```solidity
+function transferWithMemo(
+    address to,
+    uint256 amount,
+    bytes32 memo
+) external
+```
+
+**Example:**
+```solidity
+ITIP20 token = ITIP20(0x20C0...);
+bytes32 invoiceId = keccak256("INV-2024-001");
+
+token.transferWithMemo(
+    vendor,
+    1_000_000, // 1 USD (6 decimals)
+    invoiceId
+);
+```
+
+### Transfer From With Memo
+
+Allowance-based transfer with memo:
+
+```solidity
+function transferFromWithMemo(
+    address from,
+    address to,
+    uint256 amount,
+    bytes32 memo
+) external returns (bool)
+```
+
+**Use case:** Payment processors spending on behalf of users with invoice references.
+
+### Mint and Burn With Memo
+
+Administrative functions also support memos:
+
+```solidity
+// Mint tokens with memo (requires ISSUER_ROLE)
+function mintWithMemo(
+    address to,
+    uint256 amount,
+    bytes32 memo
+) external
+
+// Burn tokens with memo (requires ISSUER_ROLE)  
+function burnWithMemo(
+    uint256 amount,
+    bytes32 memo
+) external
+```
+
+**Events:**
+```solidity
+emit TransferWithMemo(address(0), to, amount, memo);   // Mint
+emit TransferWithMemo(from, address(0), amount, memo); // Burn
+emit Mint(to, amount);                                  // Also emitted
+emit Burn(from, amount);                                // Also emitted
+```
+
+## Use Cases
+
+### Invoice Payments
+
+Track payments against specific invoices:
+
+```solidity
+contract InvoicePayment {
+    function payInvoice(
+        ITIP20 token,
+        address vendor,
+        uint256 amount,
+        string memory invoiceNumber
+    ) external {
+        bytes32 memo = keccak256(bytes(invoiceNumber));
+        token.transferWithMemo(vendor, amount, memo);
+    }
+}
+```
+
+**Reconciliation:**
+- Vendor indexes `TransferWithMemo` events
+- Filters by recipient (vendor address) and memo (invoice hash)
+- Matches payments to outstanding invoices
+- No off-chain database synchronization needed
+
+### Multi-Party Coordination
+
+Coordinate payments across multiple parties:
+
+```solidity
+contract Escrow {
+    bytes32 public immutable dealId;
+    
+    function releaseFunds(
+        ITIP20 token,
+        address buyer,
+        address seller,
+        uint256 amount
+    ) external {
+        // Both transfers share the same dealId memo
+        token.transferFromWithMemo(buyer, address(this), amount, dealId);
+        token.transferWithMemo(seller, amount, dealId);
+        
+        // Off-chain indexers can track the complete payment flow
+    }
+}
+```
+
+### Payment References
+
+Embed arbitrary payment metadata:
+
+```solidity
+// Account number (padded to 32 bytes)
+bytes32 accountMemo = bytes32(uint256(accountNumber));
+
+// UUID (first 16 bytes)
+bytes32 uuidMemo = bytes32(bytes16(uuid));
+
+// Hash of complex metadata
+bytes32 metadataMemo = keccak256(abi.encode(
+    orderId,
+    customerId,
+    timestamp
+));
+
+token.transferWithMemo(recipient, amount, metadataMemo);
+```
+
+### Cross-Chain Messaging
+
+Coordinate with bridge contracts:
+
+```solidity
+contract Bridge {
+    function bridgeOut(
+        ITIP20 token,
+        uint256 amount,
+        uint256 destinationChainId,
+        address destinationAddress
+    ) external {
+        // Memo encodes destination chain and address
+        bytes32 memo = keccak256(abi.encode(
+            destinationChainId,
+            destinationAddress
+        ));
+        
+        // Burn tokens with bridge reference
+        token.transferFromWithMemo(
+            msg.sender,
+            address(this),
+            amount,
+            memo
+        );
+        
+        // Bridge relayer indexes memo to mint on destination
+    }
+}
+```
+
+## Event Indexing
+
+All three indexed parameters enable efficient filtering:
+
+### Query by Sender
+
+```typescript
+const transfers = await token.queryFilter(
+    token.filters.TransferWithMemo(senderAddress, null, null)
+);
+```
+
+### Query by Recipient
+
+```typescript
+const received = await token.queryFilter(
+    token.filters.TransferWithMemo(null, recipientAddress, null)
+);
+```
+
+### Query by Memo
+
+```typescript
+const invoicePayments = await token.queryFilter(
+    token.filters.TransferWithMemo(null, null, invoiceMemoHash)
+);
+```
+
+### Complex Queries
+
+```typescript
+// All payments from buyer to vendor with specific memo
+const specificPayment = await token.queryFilter(
+    token.filters.TransferWithMemo(
+        buyerAddress,
+        vendorAddress,
+        invoiceMemoHash
+    )
+);
+```
+
+## Memo Patterns
+
+### Hash Commitments
+
+Store hash of off-chain data:
+
+```solidity
+// Off-chain: Store full invoice details in database
+struct Invoice {
+    string invoiceNumber;
+    uint256 amount;
+    uint256 dueDate;
+    string description;
+}
+
+// On-chain: Store only hash
+bytes32 invoiceHash = keccak256(abi.encode(invoice));
+token.transferWithMemo(vendor, amount, invoiceHash);
+
+// Later: Verify payment matches invoice
+require(
+    keccak256(abi.encode(invoice)) == observedMemo,
+    "Invoice mismatch"
+);
+```
+
+### Packed Metadata
+
+Pack multiple values into 32 bytes:
+
+```solidity
+// Pack: 8-byte timestamp + 8-byte order ID + 16-byte UUID
+bytes32 memo = bytes32(
+    (uint256(block.timestamp) << 192) |
+    (uint256(orderId) << 128) |
+    uint256(uint128(uuid))
+);
+
+// Unpack
+uint64 timestamp = uint64(uint256(memo) >> 192);
+uint64 orderId = uint64(uint256(memo) >> 128);
+uint128 uuid = uint128(uint256(memo));
+```
+
+### Enumeration
+
+Simple sequential numbering:
+
+```solidity
+contract SequentialPayments {
+    uint256 public paymentCount;
+    
+    function makePayment(ITIP20 token, address to, uint256 amount) external {
+        bytes32 memo = bytes32(++paymentCount);
+        token.transferWithMemo(to, amount, memo);
+    }
+}
+```
+
+## Gas Costs
+
+Memos add minimal overhead to transfers:
+
+| Operation | Gas Cost |
+|-----------|----------|
+| Transfer (no memo) | ~50,000 |
+| Transfer with memo | ~55,000 |
+| **Memo overhead** | **~5,000** |
+
+**Breakdown:**
+- Event emission: ~375 gas per topic (3 topics)
+- Event data (amount): ~8 gas per byte
+- Total: ~1,125 + ~256 + overhead = ~5,000 gas
+
+**Cost at baseline:** 0.01 cent (5,000 gas × 0.002 cent/gas)
+
+## Best Practices
+
+### Memo Design
+
+1. **Use hashes for complex data**
+   - Store full data off-chain
+   - Store only hash on-chain
+   - Verify later if needed
+
+2. **Make memos queryable**
+   - Use consistent hashing schemes
+   - Document memo format
+   - Index events for efficient queries
+
+3. **Consider privacy**
+   - Memos are public on-chain
+   - Use hashes to obscure sensitive data
+   - Don't include PII directly
+
+### Error Handling
+
+```solidity
+// Check transfer succeeded before relying on memo
+require(
+    token.transferWithMemo(to, amount, memo),
+    "Transfer failed"
+);
+
+// Or use try/catch
+try token.transferWithMemo(to, amount, memo) {
+    // Success: memo was emitted
+} catch {
+    // Failure: memo was not emitted
+}
+```
+
+### Event Parsing
+
+```solidity
+interface ITIP20 {
+    event TransferWithMemo(
+        address indexed from,
+        address indexed to,
+        uint256 amount,
+        bytes32 indexed memo
+    );
+}
+
+// Parse events
+ITIP20 token = ITIP20(tokenAddress);
+ITIP20.TransferWithMemo[] memory events = 
+    queryTransferWithMemo(token, fromBlock, toBlock);
+
+for (uint256 i = 0; i < events.length; i++) {
+    processPayment(
+        events[i].from,
+        events[i].to,
+        events[i].amount,
+        events[i].memo
+    );
+}
+```
+
+## Integration Example
+
+```solidity
+contract PaymentProcessor {
+    ITIP20 public immutable token;
+    
+    // Track invoice status by hash
+    mapping(bytes32 => InvoiceStatus) public invoices;
+    
+    struct InvoiceStatus {
+        address vendor;
+        uint256 amount;
+        bool paid;
+    }
+    
+    event InvoiceCreated(bytes32 indexed invoiceHash, address vendor, uint256 amount);
+    event InvoicePaid(bytes32 indexed invoiceHash, address payer);
+    
+    function createInvoice(
+        bytes32 invoiceHash,
+        address vendor,
+        uint256 amount
+    ) external {
+        invoices[invoiceHash] = InvoiceStatus({
+            vendor: vendor,
+            amount: amount,
+            paid: false
+        });
+        
+        emit InvoiceCreated(invoiceHash, vendor, amount);
+    }
+    
+    function payInvoice(bytes32 invoiceHash) external {
+        InvoiceStatus storage invoice = invoices[invoiceHash];
+        require(!invoice.paid, "Already paid");
+        require(invoice.amount > 0, "Invoice not found");
+        
+        // Transfer with invoice hash as memo
+        token.transferFromWithMemo(
+            msg.sender,
+            invoice.vendor,
+            invoice.amount,
+            invoiceHash
+        );
+        
+        invoice.paid = true;
+        emit InvoicePaid(invoiceHash, msg.sender);
+    }
+    
+    // Off-chain: Index TransferWithMemo events to reconcile payments
+    function reconcile() external view returns (bytes32[] memory unpaid) {
+        // Query all TransferWithMemo events
+        // Match memos to invoices
+        // Return list of unpaid invoice hashes
+    }
+}
+```
+
+## Comparison to Alternatives
+
+### vs. Off-Chain References
+
+**On-chain memos:**
+- ✅ Trustless verification
+- ✅ Permanent record
+- ✅ Indexed for efficient queries
+- ❌ Additional gas cost (~5,000 gas)
+- ❌ 32-byte limit
+
+**Off-chain references:**
+- ✅ No gas cost
+- ✅ Unlimited metadata
+- ❌ Requires centralized database
+- ❌ Not cryptographically linked
+
+### vs. Separate Event Emission
+
+**TransferWithMemo:**
+- ✅ Atomic with transfer
+- ✅ Single event to index
+- ✅ Guaranteed consistency
+
+**Separate events:**
+- ❌ Can emit without transfer
+- ❌ Two events to track
+- ❌ Possible inconsistency
+
+### vs. Contract Storage
+
+**Event logs:**
+- ✅ Much cheaper (~5,000 gas)
+- ✅ Indexed for filtering
+- ❌ Cannot read from contracts
+
+**Storage:**
+- ❌ Expensive (250,000 gas for new slot)
+- ❌ Requires custom indexing
+- ✅ Can read from contracts
+
+## Security Considerations
+
+### Memo Forgery
+
+Memos are not signatures:
+- Anyone can transfer with any memo
+- Don't rely on memo alone for authentication
+- Combine with sender/recipient validation
+
+```solidity
+// Bad: Trusts memo alone
+function processPayment(bytes32 orderMemo) external {
+    // Anyone can send payment with orderMemo!
+}
+
+// Good: Validates sender
+function processPayment(bytes32 orderMemo) external {
+    require(authorizedPayers[msg.sender], "Unauthorized");
+    // Now we know payment came from authorized source
+}
+```
+
+### Privacy
+
+Memos are public:
+- Never include sensitive data directly
+- Use hashes to obscure relationships
+- Consider privacy of hash preimages
+
+### Replay Attacks
+
+Memo observation doesn't prevent replays:
+- Use unique memos per payment
+- Track processed memos
+- Implement nonce schemes if needed
+
+```solidity
+mapping(bytes32 => bool) public processedMemos;
+
+function processPayment(bytes32 memo) external {
+    require(!processedMemos[memo], "Already processed");
+    processedMemos[memo] = true;
+    // Process payment
+}
+```
+
+## See Also
+
+- [Transfers](/protocol/tip20/transfers) - Transfer methods and gas costs
+- [Compliance](/protocol/tip20/compliance) - Policy enforcement on transfers
+- [Event Indexing](/protocol/tip20/overview) - Querying on-chain events

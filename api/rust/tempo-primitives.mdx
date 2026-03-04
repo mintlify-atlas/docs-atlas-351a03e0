@@ -1,0 +1,394 @@
+---
+title: tempo-primitives
+description: Core primitive types for Tempo - transactions, blocks, headers, and receipts
+---
+
+The `tempo-primitives` crate defines the fundamental data structures used throughout Tempo, including custom transaction types, block structures, and Account Abstraction primitives.
+
+## Installation
+
+```toml
+[dependencies]
+tempo-primitives = "0.1.0"
+```
+
+## Transaction Types
+
+### TempoTxType
+
+Tempo's extended transaction type enum.
+
+```rust
+use tempo_primitives::TempoTxType;
+
+pub enum TempoTxType {
+    Legacy = 0x00,      // EIP-155 legacy transactions
+    Eip2930 = 0x01,     // EIP-2930 access list transactions
+    Eip1559 = 0x02,     // EIP-1559 dynamic fee transactions
+    Eip7702 = 0x04,     // EIP-7702 set code transactions
+    AA = 0x7f,          // Tempo Account Abstraction transactions
+}
+```
+
+**Source:** `crates/primitives/src/transaction/mod.rs`
+
+### TempoTxEnvelope
+
+Signed transaction envelope supporting all Tempo transaction types.
+
+```rust
+use tempo_primitives::{TempoTxEnvelope, TempoTransaction};
+use alloy_consensus::Signed;
+
+pub enum TempoTxEnvelope {
+    Legacy(Signed<TxLegacy>),
+    Eip2930(Signed<TxEip2930>),
+    Eip1559(Signed<TxEip1559>),
+    Eip7702(Signed<TxEip7702>),
+    AA(Signed<TempoTransaction>),
+}
+```
+
+**Source:** `crates/primitives/src/transaction/envelope.rs`
+
+### TempoTransaction
+
+Account Abstraction transaction with advanced features.
+
+```rust
+use tempo_primitives::transaction::TempoTransaction;
+use alloy_primitives::{Address, U256, Bytes};
+
+pub struct TempoTransaction {
+    pub chain_id: u64,
+    pub nonce: u64,
+    pub nonce_key: U256,
+    pub max_priority_fee_per_gas: u128,
+    pub max_fee_per_gas: u128,
+    pub gas_limit: u64,
+    pub fee_token: Address,
+    pub calls: Vec<Call>,
+    pub authorization_list: Vec<TempoSignedAuthorization>,
+    pub key_authorization: Option<SignedKeyAuthorization>,
+    pub key_id: Option<Address>,
+    pub valid_before: Option<u64>,
+    pub valid_after: Option<u64>,
+}
+```
+
+**Key Fields:**
+
+<ParamField path="nonce_key" type="U256">
+  Custom nonce key for 2D nonce system (0 = use standard nonce)
+</ParamField>
+
+<ParamField path="fee_token" type="Address">
+  TIP-20 token address to pay gas fees in
+</ParamField>
+
+<ParamField path="calls" type="Vec<Call>">
+  Array of calls for multi-call batching
+</ParamField>
+
+<ParamField path="key_authorization" type="Option<SignedKeyAuthorization>">
+  Authorization to use a delegated signing key
+</ParamField>
+
+<ParamField path="valid_before" type="Option<u64>">
+  Unix timestamp after which transaction is invalid
+</ParamField>
+
+<ParamField path="valid_after" type="Option<u64>">
+  Unix timestamp before which transaction is invalid
+</ParamField>
+
+**Source:** `crates/primitives/src/transaction/tempo.rs`
+
+### TempoSignature
+
+Multi-algorithm signature type supporting secp256k1, P-256, and WebAuthn.
+
+```rust
+use tempo_primitives::{TempoSignature, SignatureType};
+
+pub enum TempoSignature {
+    Primitive(PrimitiveSignature),
+    WebAuthn(WebAuthnSignature),
+}
+
+pub enum PrimitiveSignature {
+    Secp256k1(Signature),  // Standard Ethereum ECDSA
+    P256(Signature),       // NIST P-256 ECDSA
+}
+
+pub struct WebAuthnSignature {
+    pub authenticator_data: Bytes,
+    pub client_data_json: Bytes,
+    pub signature: Signature,
+}
+```
+
+**Signature Types:**
+
+<ParamField path="Secp256k1" type="0">
+  Standard Ethereum ECDSA signature (65 bytes)
+</ParamField>
+
+<ParamField path="P256" type="1">
+  NIST P-256 ECDSA signature (64 bytes)
+</ParamField>
+
+<ParamField path="WebAuthn" type="2">
+  WebAuthn assertion signature (variable length, max 512 bytes)
+</ParamField>
+
+**Source:** `crates/primitives/src/transaction/signature.rs`
+
+## Block Types
+
+### Block
+
+Tempo block type.
+
+```rust
+use tempo_primitives::Block;
+
+// Type alias:
+pub type Block = alloy_consensus::Block<TempoTxEnvelope, TempoHeader>;
+```
+
+**Source:** `crates/primitives/src/lib.rs:36`
+
+### TempoHeader
+
+Block header with Tempo-specific fields.
+
+```rust
+use tempo_primitives::TempoHeader;
+use alloy_consensus::Header;
+
+pub struct TempoHeader {
+    pub inner: Header,
+    pub general_gas_limit: u64,
+    pub shared_gas_limit: u64,
+    pub timestamp_millis_part: u64,
+}
+```
+
+**Additional Fields:**
+
+<ParamField path="general_gas_limit" type="u64">
+  Gas limit for general (non-payment) transactions
+</ParamField>
+
+<ParamField path="shared_gas_limit" type="u64">
+  Gas limit for payment lane transactions (= blockGasLimit / 10)
+</ParamField>
+
+<ParamField path="timestamp_millis_part" type="u64">
+  Millisecond component of timestamp (0-999)
+</ParamField>
+
+The full timestamp with millisecond precision is:
+```rust
+let timestamp_ms = header.timestamp() * 1000 + header.timestamp_millis_part;
+```
+
+**Source:** `crates/primitives/src/header.rs`
+
+## Subblock Types
+
+### SubBlock
+
+Low-latency subblock for validator-specific transaction execution.
+
+```rust
+use tempo_primitives::subblock::{SubBlock, SignedSubBlock, RecoveredSubBlock};
+use alloy_primitives::B256;
+
+pub struct SubBlock {
+    pub version: SubBlockVersion,
+    pub validator: B256,
+    pub block_hash: B256,
+    pub transactions: Vec<TempoTxEnvelope>,
+}
+
+pub struct SignedSubBlock {
+    pub subblock: SubBlock,
+    pub signature: Bytes,
+}
+
+pub struct RecoveredSubBlock {
+    pub subblock: SubBlock,
+    pub signature: Bytes,
+    pub validator: B256,
+}
+```
+
+**Source:** `crates/primitives/src/subblock/mod.rs`
+
+### SubBlockMetadata
+
+Metadata encoded in system transactions for fee distribution.
+
+```rust
+use tempo_primitives::subblock::SubBlockMetadata;
+
+pub struct SubBlockMetadata {
+    pub version: SubBlockVersion,
+    pub validator: B256,
+    pub fee_recipient: Address,
+    pub signature: Bytes,
+}
+```
+
+**Source:** `crates/primitives/src/subblock/metadata.rs`
+
+### PartialValidatorKey
+
+Partial validator public key for subblock routing.
+
+```rust
+use tempo_primitives::subblock::PartialValidatorKey;
+
+// First 15 bytes of validator's ed25519 public key
+pub struct PartialValidatorKey([u8; 15]);
+
+impl PartialValidatorKey {
+    pub fn from_slice(bytes: &[u8]) -> Self;
+    pub fn matches(&self, full_key: &[u8]) -> bool;
+}
+```
+
+**Source:** `crates/primitives/src/subblock/partial_key.rs`
+
+## Receipt Types
+
+### TempoReceipt
+
+Transaction receipt for Tempo.
+
+```rust
+use tempo_primitives::TempoReceipt;
+
+// Type alias:
+pub type TempoReceipt<L = Log> = EthereumReceipt<TempoTxType, L>;
+```
+
+**Source:** `crates/primitives/src/lib.rs:43`
+
+## Constants
+
+### Transaction Type
+
+```rust
+use tempo_primitives::TEMPO_TX_TYPE_ID;
+
+// AA transaction type ID
+pub const TEMPO_TX_TYPE_ID: u8 = 0x7f;
+```
+
+**Source:** `crates/primitives/src/transaction/mod.rs:12`
+
+### Signature Lengths
+
+```rust
+use tempo_primitives::{
+    SECP256K1_SIGNATURE_LENGTH,
+    P256_SIGNATURE_LENGTH,
+    MAX_WEBAUTHN_SIGNATURE_LENGTH,
+};
+
+pub const SECP256K1_SIGNATURE_LENGTH: usize = 65;
+pub const P256_SIGNATURE_LENGTH: usize = 64;
+pub const MAX_WEBAUTHN_SIGNATURE_LENGTH: usize = 512;
+```
+
+**Source:** `crates/primitives/src/transaction/mod.rs:11-13`
+
+### Gas Price Scaling
+
+```rust
+use tempo_primitives::TEMPO_GAS_PRICE_SCALING_FACTOR;
+use alloy_primitives::U256;
+
+// Scale fee token balance to gas units
+pub const TEMPO_GAS_PRICE_SCALING_FACTOR: U256 = U256::from_limbs([1_000_000, 0, 0, 0]);
+```
+
+When calculating gas allowance from fee token balance:
+```rust
+let gas_limit = fee_token_balance
+    .saturating_mul(TEMPO_GAS_PRICE_SCALING_FACTOR)
+    .checked_div(U256::from(gas_price))
+    .unwrap_or_default();
+```
+
+**Source:** `crates/primitives/src/transaction/mod.rs:14`
+
+### Nonce Keys
+
+```rust
+use tempo_primitives::transaction::TEMPO_EXPIRING_NONCE_KEY;
+use alloy_primitives::U256;
+
+// Special nonce key for expiring transactions (valid_before/valid_after)
+pub const TEMPO_EXPIRING_NONCE_KEY: U256 = U256::from_limbs([u64::MAX, 0, 0, 0]);
+```
+
+Transactions with `valid_before` or `valid_after` must use:
+- `nonce_key = TEMPO_EXPIRING_NONCE_KEY`
+- `nonce = 0`
+
+**Source:** `crates/primitives/src/transaction/tempo.rs:24`
+
+## P-256 Address Derivation
+
+```rust
+use tempo_primitives::derive_p256_address;
+use alloy_primitives::{Address, Bytes};
+
+// Derive Ethereum address from P-256 public key
+pub fn derive_p256_address(pubkey: &Bytes) -> Address;
+```
+
+Computes: `address = keccak256(pubkey)[12..]`
+
+**Source:** `crates/primitives/src/transaction/signature.rs`
+
+## Node Primitives
+
+### TempoPrimitives
+
+Implements Reth's `NodePrimitives` trait.
+
+```rust
+use tempo_primitives::TempoPrimitives;
+use reth_primitives_traits::NodePrimitives;
+
+impl NodePrimitives for TempoPrimitives {
+    type Block = Block;
+    type BlockHeader = TempoHeader;
+    type BlockBody = BlockBody;
+    type SignedTx = TempoTxEnvelope;
+    type Receipt = TempoReceipt;
+}
+```
+
+**Source:** `crates/primitives/src/lib.rs:48-57`
+
+## Features
+
+- `std` - Standard library support (enabled by default)
+- `reth` - Reth integration types
+- `serde` - Serialization support
+- `reth-codec` - Reth database codec support
+- `serde-bincode-compat` - Bincode compatibility
+- `arbitrary` - Fuzzing support
+- `rpc` - RPC type conversions
+
+## See Also
+
+- [tempo-alloy](/api/rust/tempo-alloy) - Alloy integration
+- [tempo-evm](/api/rust/tempo-evm) - EVM implementation
+- [Account Abstraction Guide](/guides/smart-accounts) - Using AA transactions

@@ -1,0 +1,520 @@
+---
+title: Foundry
+description: Develop and test smart contracts on Tempo with Foundry
+---
+
+Foundry is a fast, portable toolkit for Ethereum development written in Rust. Tempo is fully compatible with Foundry, enabling you to develop, test, and deploy smart contracts just like on Ethereum.
+
+## Installation
+
+Install the Tempo-compatible Foundry fork:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+<Note>
+  Tempo works with standard Foundry. A Tempo-specific fork may be available in the future with additional features.
+</Note>
+
+Verify installation:
+
+```bash
+forge --version
+cast --version
+```
+
+## Quick Start
+
+### Create a New Project
+
+Initialize a Foundry project:
+
+```bash
+forge init my-tempo-project
+cd my-tempo-project
+```
+
+This creates:
+- `src/`: Smart contract sources
+- `test/`: Test files
+- `script/`: Deployment scripts
+- `foundry.toml`: Configuration file
+
+### Configure for Tempo
+
+Update `foundry.toml`:
+
+```toml
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+[rpc_endpoints]
+tempo-testnet = "https://rpc.moderato.tempo.xyz"
+
+[etherscan]
+tempo-testnet = { key = "${TEMPO_EXPLORER_KEY}", url = "https://explore.tempo.xyz/api" }
+```
+
+## Interacting with Tempo
+
+### Get Testnet Funds
+
+Use `cast` to fund an address:
+
+```bash
+cast rpc tempo_fundAddress <ADDRESS> --rpc-url https://rpc.moderato.tempo.xyz
+```
+
+Example:
+
+```bash
+cast rpc tempo_fundAddress 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb \
+  --rpc-url https://rpc.moderato.tempo.xyz
+```
+
+This funds the address with testnet stablecoins.
+
+### Query Token Balance
+
+Check TIP-20 token balance:
+
+```bash
+cast call 0x20c0000000000000000000000000000000000001 \
+  "balanceOf(address)(uint256)" \
+  0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb \
+  --rpc-url tempo-testnet
+```
+
+### Send Transfer
+
+Send a TIP-20 transfer:
+
+```bash
+cast send 0x20c0000000000000000000000000000000000001 \
+  "transfer(address,uint256)" \
+  0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb \
+  100000000 \
+  --rpc-url tempo-testnet \
+  --private-key $PRIVATE_KEY
+```
+
+### Get Block Number
+
+Query the current block:
+
+```bash
+cast block-number --rpc-url tempo-testnet
+```
+
+### Get Transaction Receipt
+
+Check transaction status:
+
+```bash
+cast receipt <TX_HASH> --rpc-url tempo-testnet
+```
+
+## Developing Contracts
+
+### Write a Contract
+
+Create `src/MyToken.sol`:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "forge-std/Script.sol";
+
+contract MyToken {
+    mapping(address => uint256) public balances;
+
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+
+    function mint(address to, uint256 amount) external {
+        balances[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    function transfer(address to, uint256 amount) external {
+        require(balances[msg.sender] >= amount, "Insufficient balance");
+        balances[msg.sender] -= amount;
+        balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+    }
+}
+```
+
+### Write Tests
+
+Create `test/MyToken.t.sol`:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "forge-std/Test.sol";
+import "../src/MyToken.sol";
+
+contract MyTokenTest is Test {
+    MyToken public token;
+    address public alice = address(0x1);
+    address public bob = address(0x2);
+
+    function setUp() public {
+        token = new MyToken();
+    }
+
+    function testMint() public {
+        token.mint(alice, 1000);
+        assertEq(token.balances(alice), 1000);
+    }
+
+    function testTransfer() public {
+        token.mint(alice, 1000);
+        
+        vm.prank(alice);
+        token.transfer(bob, 500);
+        
+        assertEq(token.balances(alice), 500);
+        assertEq(token.balances(bob), 500);
+    }
+
+    function testTransferInsufficientBalance() public {
+        token.mint(alice, 100);
+        
+        vm.prank(alice);
+        vm.expectRevert("Insufficient balance");
+        token.transfer(bob, 500);
+    }
+}
+```
+
+### Run Tests
+
+Execute tests locally:
+
+```bash
+forge test
+```
+
+Run with verbosity:
+
+```bash
+forge test -vvv
+```
+
+Run specific tests:
+
+```bash
+forge test --match-test testTransfer
+```
+
+### Test Against Tempo Fork
+
+Fork Tempo testnet for testing:
+
+```bash
+forge test --fork-url https://rpc.moderato.tempo.xyz
+```
+
+This runs tests against live Tempo state, including:
+- Real TIP-20 tokens
+- Deployed contracts
+- Current chain state
+
+## Deploying Contracts
+
+### Create Deployment Script
+
+Create `script/Deploy.s.sol`:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+import "forge-std/Script.sol";
+import "../src/MyToken.sol";
+
+contract DeployScript is Script {
+    function run() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
+
+        MyToken token = new MyToken();
+        console.log("MyToken deployed to:", address(token));
+
+        vm.stopBroadcast();
+    }
+}
+```
+
+### Deploy to Tempo Testnet
+
+Deploy using the script:
+
+```bash
+forge script script/Deploy.s.sol:DeployScript \
+  --rpc-url tempo-testnet \
+  --broadcast \
+  --verify
+```
+
+Deploy without verification:
+
+```bash
+forge script script/Deploy.s.sol:DeployScript \
+  --rpc-url tempo-testnet \
+  --broadcast
+```
+
+### Verify Contract
+
+Verify on Tempo Explorer:
+
+```bash
+forge verify-contract \
+  --chain-id 42431 \
+  --compiler-version v0.8.13+commit.abaa5c0e \
+  <CONTRACT_ADDRESS> \
+  src/MyToken.sol:MyToken \
+  --etherscan-api-key $TEMPO_EXPLORER_KEY
+```
+
+## Interacting with TIP-20 Tokens
+
+### Use TIP-20 in Contracts
+
+Import the TIP-20 interface:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.13;
+
+interface ITIP20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferWithMemo(address to, uint256 amount, bytes32 memo) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+
+contract PaymentProcessor {
+    ITIP20 public immutable token;
+
+    constructor(address _token) {
+        token = ITIP20(_token);
+    }
+
+    function processPayment(address recipient, uint256 amount, bytes32 invoiceId) external {
+        require(token.transferWithMemo(recipient, amount, invoiceId), "Transfer failed");
+    }
+}
+```
+
+### Test with TIP-20
+
+Test against forked state:
+
+```solidity
+contract PaymentProcessorTest is Test {
+    PaymentProcessor public processor;
+    ITIP20 public token;
+    
+    address constant ALPHA_USD = 0x20c0000000000000000000000000000000000001;
+
+    function setUp() public {
+        // Fork Tempo testnet
+        vm.createSelectFork("https://rpc.moderato.tempo.xyz");
+        
+        token = ITIP20(ALPHA_USD);
+        processor = new PaymentProcessor(ALPHA_USD);
+        
+        // Fund the processor with test tokens
+        vm.deal(address(processor), 100 ether);
+    }
+
+    function testProcessPayment() public {
+        address recipient = address(0x123);
+        uint256 amount = 100_000_000; // 100 tokens (6 decimals)
+        bytes32 invoiceId = bytes32("INV-001");
+        
+        processor.processPayment(recipient, amount, invoiceId);
+        
+        assertEq(token.balanceOf(recipient), amount);
+    }
+}
+```
+
+## Local Development
+
+### Run Local Tempo Node
+
+Start a local Tempo node:
+
+```bash
+just localnet
+```
+
+Connect Foundry to localnet:
+
+```bash
+cast block-number --rpc-url http://localhost:8545
+```
+
+### Use Anvil
+
+Start an Anvil instance (Foundry's local node):
+
+```bash
+anvil --chain-id 42431
+```
+
+Deploy to Anvil:
+
+```bash
+forge script script/Deploy.s.sol:DeployScript \
+  --rpc-url http://localhost:8545 \
+  --broadcast
+```
+
+## Advanced Features
+
+### Gas Reporting
+
+Enable gas reports in tests:
+
+```bash
+forge test --gas-report
+```
+
+Add to `foundry.toml`:
+
+```toml
+[profile.default]
+gas_reports = ["*"]
+```
+
+### Fuzzing
+
+Foundry automatically fuzzes test inputs:
+
+```solidity
+function testTransferFuzz(address to, uint256 amount) public {
+    vm.assume(to != address(0));
+    vm.assume(amount <= 1e9 * 1e6); // Max supply
+    
+    token.mint(alice, amount);
+    vm.prank(alice);
+    token.transfer(to, amount);
+    
+    assertEq(token.balances(to), amount);
+}
+```
+
+### Invariant Testing
+
+Test contract invariants:
+
+```solidity
+contract TokenInvariantTest is Test {
+    MyToken public token;
+    
+    function setUp() public {
+        token = new MyToken();
+    }
+    
+    function invariant_totalSupplyNeverDecreases() public {
+        // Total supply can only increase
+    }
+}
+```
+
+### Coverage
+
+Generate test coverage:
+
+```bash
+forge coverage
+```
+
+Generate detailed report:
+
+```bash
+forge coverage --report lcov
+genhtml lcov.info -o coverage
+```
+
+## Debugging
+
+### Console Logging
+
+Use console logs in contracts:
+
+```solidity
+import "forge-std/console.sol";
+
+contract MyToken {
+    function transfer(address to, uint256 amount) external {
+        console.log("Transferring", amount, "to", to);
+        // ...
+    }
+}
+```
+
+### Debug Traces
+
+Run tests with debug traces:
+
+```bash
+forge test --debug testTransfer
+```
+
+### Check Transaction
+
+Inspect a transaction:
+
+```bash
+cast run <TX_HASH> --rpc-url tempo-testnet
+```
+
+## Best Practices
+
+1. **Test thoroughly**: Use fuzz testing and invariant testing
+2. **Fork for integration tests**: Test against live Tempo state
+3. **Use `.env` for secrets**: Never commit private keys
+4. **Verify contracts**: Always verify on Tempo Explorer
+5. **Gas optimization**: Use `forge snapshot` to track gas usage
+
+## Common Commands
+
+| Command | Description |
+|---------|-------------|
+| `forge build` | Compile contracts |
+| `forge test` | Run tests |
+| `forge script` | Execute deployment script |
+| `forge create` | Deploy single contract |
+| `forge verify-contract` | Verify on block explorer |
+| `cast send` | Send transaction |
+| `cast call` | Read contract state |
+| `cast rpc` | Call custom RPC method |
+| `anvil` | Start local node |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Foundry Book" icon="book" href="https://book.getfoundry.sh">
+    Complete Foundry documentation
+  </Card>
+  <Card title="Solidity Examples" icon="code" href="/guides/making-payments">
+    View contract examples
+  </Card>
+  <Card title="TIP-20 Standard" icon="coins" href="/protocol/tip20/overview">
+    Learn about Tempo tokens
+  </Card>
+  <Card title="Deploy Guide" icon="rocket" href="/guides/deploying-contracts">
+    Deploy your first contract
+  </Card>
+</CardGroup>

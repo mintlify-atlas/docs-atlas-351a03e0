@@ -1,0 +1,419 @@
+---
+title: Configuration
+description: Configure your Tempo node with command-line arguments, environment variables, and configuration files
+---
+
+Tempo nodes can be configured through command-line arguments, environment variables, and configuration files. This guide covers the essential configuration options.
+
+## Configuration Methods
+
+### Command-Line Arguments
+
+The primary way to configure Tempo:
+
+```bash
+tempo node \
+  --chain moderato \
+  --datadir /var/lib/tempo \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546
+```
+
+### Environment Variables
+
+Some options support environment variables:
+
+```bash
+export TEMPO_TELEMETRY_URL="https://user:pass@metrics.example.com"
+export TEMPO_FOLLOW="https://rpc.moderato.tempo.xyz"
+tempo node --chain moderato
+```
+
+## Network Selection
+
+### Chain Options
+
+Select which network to connect to:
+
+```bash
+# Mainnet (Presto)
+tempo node --chain mainnet
+
+# Testnet (Moderato)
+tempo node --chain moderato
+
+# Alternative testnet (Andantino)
+tempo node --chain testnet
+
+# Development mode (local network)
+tempo node --dev
+
+# Custom genesis file
+tempo node --chain /path/to/genesis.json
+```
+
+### Network Details
+
+| Network | Chain ID | Type | Default RPC |
+|---------|----------|------|-------------|
+| mainnet | 4217 | Production | `wss://rpc.testnet.tempo.xyz` |
+| moderato | 42431 | Testnet | `wss://rpc.moderato.tempo.xyz` |
+| testnet (andantino) | 42429 | Testnet | `wss://rpc.testnet.tempo.xyz` |
+| dev | Custom | Local | Local only |
+
+## Data Directory
+
+### Base Data Directory
+
+Specify where to store blockchain data:
+
+```bash
+tempo node --datadir /var/lib/tempo
+```
+
+Default locations:
+- Linux: `~/.local/share/tempo/`
+- macOS: `~/Library/Application Support/tempo/`
+
+Directory structure:
+```
+/var/lib/tempo/
+├── db/              # Blockchain database
+├── consensus/       # Consensus layer data
+├── keystore/        # Keys and credentials
+└── static_files/    # Additional node data
+```
+
+### Consensus Data Directory
+
+Override consensus data location:
+
+```bash
+tempo node \
+  --datadir /var/lib/tempo \
+  --consensus.datadir /mnt/ssd/consensus
+```
+
+## RPC Configuration
+
+### HTTP RPC
+
+Enable HTTP JSON-RPC:
+
+```bash
+tempo node \
+  --http \
+  --http.addr 0.0.0.0 \
+  --http.port 8545 \
+  --http.api eth,web3,net,debug,trace
+```
+
+HTTP options:
+- `--http`: Enable HTTP RPC server
+- `--http.addr <IP>`: Bind address (default: `127.0.0.1`)
+- `--http.port <PORT>`: Port to listen on (default: `8545`)
+- `--http.api <APIS>`: Enabled API namespaces
+- `--http.corsdomain <ORIGINS>`: CORS origins (comma-separated)
+
+### WebSocket RPC
+
+Enable WebSocket RPC:
+
+```bash
+tempo node \
+  --ws \
+  --ws.addr 0.0.0.0 \
+  --ws.port 8546 \
+  --ws.api eth,web3,net,debug
+```
+
+WebSocket options:
+- `--ws`: Enable WebSocket RPC server
+- `--ws.addr <IP>`: Bind address (default: `127.0.0.1`)
+- `--ws.port <PORT>`: Port to listen on (default: `8546`)
+- `--ws.api <APIS>`: Enabled API namespaces
+- `--ws.origins <ORIGINS>`: Allowed origins (comma-separated)
+
+### Available APIs
+
+- `eth`: Ethereum JSON-RPC methods
+- `web3`: Web3 client version
+- `net`: Network information
+- `debug`: Debug and trace methods
+- `trace`: Transaction tracing
+- `tempo`: Tempo-specific methods
+
+## Consensus Configuration
+
+Validator nodes require consensus layer configuration.
+
+### Required Validator Settings
+
+```bash
+tempo node \
+  --chain moderato \
+  --consensus.signing-key /path/to/signing-key.hex \
+  --consensus.signing-share /path/to/signing-share.hex \
+  --consensus.fee-recipient 0xYourFeeRecipientAddress
+```
+
+### Consensus Network
+
+Configure consensus P2P networking:
+
+```bash
+tempo node \
+  --consensus.listen-address 0.0.0.0:8000 \
+  --consensus.metrics-address 127.0.0.1:8001
+```
+
+Options:
+- `--consensus.listen-address <IP:PORT>`: Address for consensus P2P (default: `127.0.0.1:8000`)
+- `--consensus.metrics-address <IP:PORT>`: Metrics endpoint (default: `127.0.0.1:8001`)
+- `--consensus.signing-key <PATH>`: Ed25519 signing key for P2P
+- `--consensus.signing-share <PATH>`: BLS12-381 threshold signing share
+- `--consensus.fee-recipient <ADDRESS>`: Address to receive block rewards
+
+### Consensus Performance
+
+Tune consensus performance:
+
+```bash
+tempo node \
+  --consensus.worker-threads 3 \
+  --consensus.message-backlog 16384 \
+  --consensus.mailbox-size 16384 \
+  --consensus.deque-size 10
+```
+
+Performance options:
+- `--consensus.worker-threads <N>`: Worker threads (default: `3`)
+- `--consensus.message-backlog <N>`: Message queue size (default: `16384`)
+- `--consensus.mailbox-size <N>`: Mailbox capacity (default: `16384`)
+- `--consensus.deque-size <N>`: Block buffer per peer (default: `10`)
+- `--consensus.max-message-size-bytes <N>`: Max message size (default: `1048576`)
+
+### Consensus Timeouts
+
+Adjust consensus timing:
+
+```bash
+tempo node \
+  --consensus.wait-for-proposal 1200ms \
+  --consensus.wait-for-notarizations 2s \
+  --consensus.time-to-build-proposal 500ms
+```
+
+Timing options:
+- `--consensus.wait-for-proposal <DURATION>`: Wait for leader proposal (default: `1200ms`)
+- `--consensus.wait-for-notarizations <DURATION>`: Wait for notarization quorum (default: `2s`)
+- `--consensus.time-to-build-proposal <DURATION>`: Block build time (default: `500ms`)
+- `--consensus.time-to-build-subblock <DURATION>`: Subblock build time (default: `100ms`)
+- `--consensus.wait-for-peer-response <DURATION>`: Peer response timeout (default: `2s`)
+
+### Local Network Mode
+
+For development or private networks:
+
+```bash
+tempo node \
+  --dev \
+  --consensus.use-local-defaults \
+  --consensus.allow-private-ips \
+  --consensus.bypass-ip-check
+```
+
+## Networking
+
+### P2P Configuration
+
+Configure execution layer P2P:
+
+```bash
+tempo node \
+  --port 30303 \
+  --discovery.port 30303 \
+  --nat extip:1.2.3.4
+```
+
+P2P options:
+- `--port <PORT>`: P2P listening port (default: `30303`)
+- `--discovery.port <PORT>`: Discovery port (default: same as `--port`)
+- `--nat <METHOD>`: NAT traversal method (`none`, `extip:<IP>`, `upnp`)
+- `--bootnodes <ENODES>`: Comma-separated bootnode ENR addresses
+
+### Follow Mode
+
+Run a non-validating node that follows another RPC:
+
+```bash
+# Auto-detect RPC based on chain
+tempo node --chain moderato --follow
+
+# Use specific RPC URL
+tempo node --chain moderato --follow https://rpc.moderato.tempo.xyz
+```
+
+## Logging & Telemetry
+
+### Log Level
+
+Control log verbosity:
+
+```bash
+tempo node --log.level info
+```
+
+Levels: `error`, `warn`, `info`, `debug`, `trace`
+
+### Unified Telemetry
+
+Export metrics and logs to a telemetry backend:
+
+```bash
+tempo node \
+  --telemetry-url https://user:pass@metrics.example.com \
+  --telemetry-metrics-interval 10s
+```
+
+This configures:
+- **OTLP Logs**: Exported to `/opentelemetry/v1/logs`
+- **Prometheus Metrics**: Pushed to `/api/v1/import/prometheus`
+
+Environment variable equivalent:
+```bash
+export TEMPO_TELEMETRY_URL="https://user:pass@metrics.example.com"
+```
+
+### Pyroscope Profiling
+
+Enable continuous profiling (requires `pyroscope` feature):
+
+```bash
+tempo node \
+  --pyroscope.enabled \
+  --pyroscope.server-url http://localhost:4040 \
+  --pyroscope.application-name tempo-node \
+  --pyroscope.sample-rate 100
+```
+
+## Transaction Pool
+
+Configure the transaction pool:
+
+```bash
+tempo node \
+  --txpool.pending-max-count 50000 \
+  --txpool.queued-max-count 50000 \
+  --txpool.max-account-slots 150000
+```
+
+Defaults are optimized for Tempo's high throughput.
+
+## Snapshots & Sync
+
+### Download Snapshot
+
+Fast sync using snapshots:
+
+```bash
+# Download latest snapshot for the chain
+tempo node --chain moderato --download
+
+# Or specify custom snapshot URL
+tempo download --url https://snapshots.tempoxyz.dev/42431
+```
+
+Available snapshots:
+- Mainnet: `https://snapshots.tempoxyz.dev/4217`
+- Moderato: `https://snapshots.tempoxyz.dev/42431`
+- Andantino: `https://snapshots.tempoxyz.dev/42429`
+
+## Faucet (Testnet Only)
+
+Enable built-in faucet for testnet:
+
+```bash
+tempo node \
+  --chain moderato \
+  --faucet.enabled \
+  --faucet.amount 1000000000000000000 \
+  --faucet.addresses 0xAddress1,0xAddress2
+```
+
+## Example Configurations
+
+### Archive Node
+
+Full archival node with all history:
+
+```bash
+tempo node \
+  --chain moderato \
+  --datadir /mnt/storage/tempo-archive \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546 \
+  --http.api eth,web3,net,debug,trace \
+  --ws.api eth,web3,net,debug
+```
+
+### Validator Node
+
+Production validator:
+
+```bash
+tempo node \
+  --chain mainnet \
+  --datadir /var/lib/tempo \
+  --consensus.signing-key /etc/tempo/signing-key.hex \
+  --consensus.signing-share /etc/tempo/signing-share.hex \
+  --consensus.fee-recipient 0xYourAddress \
+  --consensus.listen-address 0.0.0.0:8000 \
+  --consensus.metrics-address 127.0.0.1:8001 \
+  --http --http.addr 127.0.0.1 --http.port 8545 \
+  --telemetry-url https://user:pass@metrics.example.com
+```
+
+### Development Node
+
+Local development with all features:
+
+```bash
+tempo node \
+  --dev \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546 \
+  --http.api eth,web3,net,debug,trace,tempo \
+  --http.corsdomain "*"
+```
+
+## Configuration Files
+
+While Tempo primarily uses CLI arguments, consensus configuration can use TOML files:
+
+```toml consensus.toml
+signer = "0x..."
+share = "0x..."
+listen_port = 8000
+metrics_port = 8001
+storage_directory = "/var/lib/tempo/consensus"
+worker_threads = 3
+bootstrappers = ["0x..."]
+message_backlog = 16384
+mailbox_size = 16384
+deque_size = 10
+fee_recipient = "0x..."
+
+[p2p]
+max_message_size_bytes = 1048576
+
+[timeouts]
+time_for_peer_response = "2s"
+time_to_collect_notarizations = "2s"
+time_to_propose = "1200ms"
+```
+
+## Next Steps
+
+- [Run your node](/node/running) - Start and connect to the network
+- [Maintenance](/node/maintenance) - Keep your node healthy and updated

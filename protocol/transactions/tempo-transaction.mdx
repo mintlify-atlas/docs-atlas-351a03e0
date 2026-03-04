@@ -1,0 +1,407 @@
+---
+title: Tempo Transaction
+description: Native Tempo transaction format with account abstraction and batching support
+---
+
+Tempo Transaction (type `0x76`) is Tempo's native transaction format, designed for high-throughput payment systems with advanced account abstraction features.
+
+## Overview
+
+Tempo Transactions extend Ethereum's transaction model with:
+
+- **Multiple signature types**: secp256k1, P256, and WebAuthn
+- **Batch execution**: Execute multiple calls atomically in a single transaction
+- **Flexible nonces**: 2D nonces for parallelization and expiring nonces for time-based replay protection
+- **Gas sponsorship**: Built-in fee payer signatures for gasless transactions
+- **Fee token preference**: Optional TIP-20 token for fee payment
+- **Delegation support**: EIP-7702-style authorization lists with Tempo signatures
+
+## Transaction Structure
+
+A Tempo Transaction contains the following fields:
+
+### Core Fields
+
+```rust
+pub struct TempoTransaction {
+    // EIP-155: Chain ID for replay protection
+    pub chain_id: ChainId,
+    
+    // EIP-1559: Dynamic fee parameters
+    pub max_priority_fee_per_gas: u128,
+    pub max_fee_per_gas: u128,
+    pub gas_limit: u64,
+    
+    // Batch execution
+    pub calls: Vec<Call>,
+    
+    // EIP-2930: Access list optimization
+    pub access_list: AccessList,
+    
+    // 2D nonce system
+    pub nonce_key: U256,
+    pub nonce: u64,
+    
+    // Optional fields
+    pub fee_token: Option<Address>,
+    pub fee_payer_signature: Option<Signature>,
+    pub valid_before: Option<u64>,
+    pub valid_after: Option<u64>,
+    pub key_authorization: Option<SignedKeyAuthorization>,
+    pub tempo_authorization_list: Vec<TempoSignedAuthorization>,
+}
+```
+
+### Call Structure
+
+Each call in the batch contains:
+
+```rust
+pub struct Call {
+    pub to: TxKind,      // Call address or Create
+    pub value: U256,     // ETH/native token value
+    pub input: Bytes,    // Call data
+}
+```
+
+Source: [`tempo_transaction.rs:91-101`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L91-L101)
+
+## Batching
+
+Tempo Transactions can execute multiple calls atomically in a single transaction.
+
+### Rules
+
+1. **Non-empty calls**: The `calls` list must contain at least one call
+2. **CREATE restriction**: Only the first call can be a CREATE; all subsequent calls must be CALL
+3. **Authorization list restriction**: CREATE calls are not allowed when the authorization list is non-empty (EIP-7702 semantics)
+
+### Example
+
+```typescript
+// Batch transfer to multiple recipients
+const tx = {
+  chain_id: 1,
+  calls: [
+    {
+      to: tokenAddress,
+      value: 0n,
+      input: encodeTransfer(recipient1, amount1)
+    },
+    {
+      to: tokenAddress,
+      value: 0n,
+      input: encodeTransfer(recipient2, amount2)
+    },
+    {
+      to: tokenAddress,
+      value: 0n,
+      input: encodeTransfer(recipient3, amount3)
+    }
+  ],
+  // ... other fields
+}
+```
+
+Source: [`tempo_transaction.rs:242-270`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L242-L270)
+
+## Nonce Systems
+
+Tempo Transactions support two nonce systems:
+
+### 2D Nonces (Standard)
+
+2D nonces use a two-dimensional `(nonce_key, nonce)` system that enables parallel transaction submission.
+
+**Nonce Keys:**
+- `nonce_key = 0`: Protocol nonce (sequential, like Ethereum)
+- `nonce_key = 1..uint256.max-1`: User-defined nonce keys for parallel transactions
+- `nonce_key = uint256.max`: Reserved for expiring nonces (see below)
+
+**Usage:**
+```typescript
+// Sequential transactions (standard Ethereum behavior)
+const tx1 = { nonce_key: 0n, nonce: 5 };
+const tx2 = { nonce_key: 0n, nonce: 6 };  // Must wait for tx1
+
+// Parallel transactions (independent)
+const txA = { nonce_key: 1n, nonce: 0 };
+const txB = { nonce_key: 2n, nonce: 0 };  // Can execute concurrently
+```
+
+Source: [`tempo_transaction.rs:202-208`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L202-L208)
+
+### Expiring Nonces (TIP-1009)
+
+Expiring nonces provide time-based replay protection instead of sequential ordering.
+
+**Constants:**
+```rust
+pub const TEMPO_EXPIRING_NONCE_KEY: U256 = U256::MAX;
+pub const TEMPO_EXPIRING_NONCE_MAX_EXPIRY_SECS: u64 = 30;
+```
+
+**Requirements:**
+- `nonce_key` must be `U256::MAX`
+- `nonce` must be `0`
+- `valid_before` must be set and within 30 seconds of current time
+- Replay protection uses transaction hash instead of sequential nonces
+
+**Example:**
+```typescript
+const tx = {
+  nonce_key: 2n**256n - 1n,  // U256::MAX
+  nonce: 0,
+  valid_before: Math.floor(Date.now() / 1000) + 30,  // 30 seconds from now
+  // ... other fields
+};
+```
+
+**Benefits:**
+- No need to track nonce ordering
+- Concurrent transactions from same sender
+- Simplified UX for gasless/meta-transactions
+- Automatic expiry (no manual cancellation needed)
+
+**Gas Cost:**
+Expiring nonces add approximately 13,000 gas for replay protection storage operations.
+
+See [TIP-1009: Expiring Nonces](https://github.com/tempo-labs/tempo/blob/main/tips/tip-1009.md) for full specification.
+
+Source: [`tempo_transaction.rs:26-29`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L26-L29)
+
+## Time Bounds
+
+Tempo Transactions can specify validity windows using `valid_before` and `valid_after` timestamps.
+
+### Valid Before
+
+Transaction is only valid before this Unix timestamp (seconds):
+
+```typescript
+const tx = {
+  valid_before: Math.floor(Date.now() / 1000) + 3600,  // Valid for 1 hour
+  // ...
+};
+```
+
+### Valid After
+
+Transaction is only valid after this Unix timestamp (seconds):
+
+```typescript
+const tx = {
+  valid_after: Math.floor(Date.now() / 1000) + 300,  // Valid after 5 minutes
+  // ...
+};
+```
+
+### Validation Rules
+
+- If both are set: `valid_before` must be greater than `valid_after`
+- For expiring nonces: `valid_before` is required and must be within 30 seconds
+- Transactions outside their validity window are rejected by the transaction pool
+
+Source: [`tempo_transaction.rs:298-305`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L298-L305)
+
+## Signature Types
+
+Tempo Transactions support three signature algorithms:
+
+### secp256k1 (Standard Ethereum)
+
+```rust
+pub const SECP256K1_SIGNATURE_LENGTH: usize = 65;
+```
+
+Standard Ethereum ECDSA signatures. Used for:
+- EOA (Externally Owned Account) transactions
+- Hardware wallet signatures
+- Backward compatibility
+
+### P256 (NIST P-256)
+
+```rust
+pub const P256_SIGNATURE_LENGTH: usize = 129;
+```
+
+NIST P-256 elliptic curve signatures. Used for:
+- Secure enclave signatures (iOS Secure Enclave, Android Keystore)
+- Hardware security modules (HSMs)
+- Government/enterprise compliance
+
+### WebAuthn (Passkeys)
+
+```rust
+pub const MAX_WEBAUTHN_SIGNATURE_LENGTH: usize = 2048;  // 2KB max
+```
+
+WebAuthn/FIDO2 signatures. Used for:
+- Passkey-based authentication
+- Biometric authentication (Face ID, Touch ID, fingerprint)
+- Hardware security keys (YubiKey)
+
+Source: [`tempo_transaction.rs:21-23`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L21-L23)
+
+## Gas Sponsorship
+
+Tempo Transactions support built-in gas sponsorship via fee payer signatures.
+
+### Fee Payer Signature
+
+A separate secp256k1 signature that authorizes gas payment:
+
+```typescript
+const tx = {
+  // User signs transaction (any signature type)
+  // ...
+  
+  // Fee payer signs separately to sponsor gas
+  fee_payer_signature: sponsorSignature,
+};
+```
+
+### Signature Hash
+
+The fee payer signature is computed over:
+
+```rust
+pub const FEE_PAYER_SIGNATURE_MAGIC_BYTE: u8 = 0x78;
+
+// Hash = keccak256(0x78 || RLP([chain_id, sender, ...fields including fee_token]))
+```
+
+**Key points:**
+- Fee payer commits to the `fee_token` field
+- User does NOT commit to `fee_token` (skipped when `fee_payer_signature` is present)
+- This allows fee payers to specify the payment token while users remain token-agnostic
+
+Source: [`tempo_transaction.rs:336-362`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L336-L362)
+
+### Fee Token Preference
+
+Optional TIP-20 token for fee payment:
+
+```typescript
+const tx = {
+  fee_token: usdcAddress,  // Pay fees in USDC
+  // ...
+};
+```
+
+- `None`: No preference (sequencer chooses)
+- `Some(address)`: Preferred TIP-20 token for fee payment
+
+Source: [`tempo_transaction.rs:175-176`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L175-L176)
+
+## Authorization Lists
+
+Tempo Transactions support EIP-7702-style authorization lists with Tempo signature types.
+
+### Tempo Signed Authorization
+
+Allows accounts to delegate execution to smart contracts:
+
+```rust
+pub struct TempoSignedAuthorization {
+    pub authorization: Authorization,  // EIP-7702 authorization
+    pub signature: TempoSignature,     // secp256k1, P256, or WebAuthn
+}
+```
+
+This enables:
+- Smart contract wallets
+- Account abstraction patterns
+- Batch operations with delegation
+- WebAuthn/passkey-based contract wallets
+
+**Restriction:** CREATE calls are not allowed when authorization list is non-empty (EIP-7702 semantics).
+
+Source: [`tempo_transaction.rs:229-231`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L229-L231)
+
+## Key Authorization
+
+Optional field for provisioning new access keys in the AccountKeychain precompile:
+
+```rust
+pub struct SignedKeyAuthorization {
+    pub key_authorization: KeyAuthorization,
+    pub root_key_signature: Signature,  // Must be signed by root key
+}
+```
+
+**Usage:**
+1. User signs authorization with their root key
+2. Transaction can be signed with a Keychain signature (access key)
+3. The new key is added to the keychain before signature verification
+
+This enables just-in-time key provisioning in a single transaction.
+
+Source: [`tempo_transaction.rs:222-227`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L222-L227)
+
+## Gas Costs
+
+### Base Transaction Gas
+
+```
+Intrinsic Gas = 21,000 + calldata_gas + [optional_costs]
+```
+
+**Optional costs:**
+- **Account creation** (first transaction, `nonce = 0`): +250,000 gas (TIP-1000)
+- **Expiring nonce**: +13,000 gas for replay protection
+- **New storage**: 250,000 gas per new state element (TIP-1000)
+
+### Batch Gas Savings
+
+Batching multiple calls saves gas by sharing the base transaction overhead:
+
+```
+Single transactions: 3 × 21,000 = 63,000 gas (base only)
+Batched transaction:  1 × 21,000 = 21,000 gas (base only)
+Savings:             42,000 gas
+```
+
+## Transaction Hash
+
+The transaction hash is computed as:
+
+```rust
+pub fn signature_hash(&self) -> B256 {
+    let mut buf = Vec::new();
+    self.encode_for_signing(&mut buf);
+    keccak256(&buf)
+}
+```
+
+**Encoding:**
+```
+Hash = keccak256(0x76 || RLP([fields with fee_token optionally omitted]))
+```
+
+**Note:** If `fee_payer_signature` is present, the user's signature hash omits `fee_token`. This allows fee payers to specify the payment token.
+
+Source: [`tempo_transaction.rs:329-334`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L329-L334)
+
+## Validation Rules
+
+Tempo Transactions must satisfy:
+
+1. **Non-empty calls**: `calls.len() > 0`
+2. **CREATE restriction**: Only first call can be CREATE
+3. **Authorization list**: No CREATE when authorization list is non-empty
+4. **Time bounds**: `valid_before > valid_after` (if both set)
+5. **Expiring nonce constraints**:
+   - `nonce_key == U256::MAX`
+   - `nonce == 0`
+   - `valid_before` required and within 30 seconds
+
+Source: [`tempo_transaction.rs:288-307`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/tempo_transaction.rs#L288-L307)
+
+## Related Documentation
+
+- [Transaction Types Overview](/protocol/transactions/overview)
+- [Nonce Systems](/protocol/precompiles/nonce)
+- [Signature Types](/concepts/tempo-transactions)
+- [TIP-1009: Expiring Nonces](https://github.com/tempo-labs/tempo/blob/main/tips/tip-1009.md)
+- [TIP-1000: State Creation Costs](https://github.com/tempo-labs/tempo/blob/main/tips/tip-1000.md)

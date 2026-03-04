@@ -1,0 +1,494 @@
+---
+title: Paying Gas in Stablecoins
+description: How to pay transaction fees using USD-denominated TIP-20 tokens
+---
+
+Tempo enables users to pay transaction fees in any USD-denominated TIP-20 stablecoin. This eliminates the need to acquire and manage a separate gas token, simplifying the payment experience.
+
+## Supported Fee Tokens
+
+Any TIP-20 token with `currency() == "USD"` can be used as a fee token, including:
+
+- **pathUSD** (`0x20C0000000000000000000000000000000000000`) - Tempo's native stablecoin
+- **USDC** - Circle's USD Coin
+- **USDT** - Tether USD
+- Any other USD-denominated TIP-20 token with sufficient Fee AMM liquidity
+
+<Info>
+All TIP-20 stablecoins use **6 decimals** (matching USDC). One token unit = 1 microdollar (μUSD) = $0.000001.
+</Info>
+
+## Setting Your Fee Token Preference
+
+Users specify which token they want to pay fees in by calling the FeeManager precompile:
+
+```solidity
+interface IFeeManager {
+    function setUserToken(address token) external;
+}
+```
+
+### Using Cast
+
+```bash
+cast send 0xfeeC000000000000000000000000000000000000 \
+  "setUserToken(address)" \
+  0x123...ABC \
+  --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY
+```
+
+Replace `0x123...ABC` with your preferred TIP-20 stablecoin address.
+
+### Using viem
+
+```typescript
+import { createWalletClient, http } from 'viem';
+import { moderato } from '@tempoxyz/sdk/chains';
+
+const client = createWalletClient({
+  chain: moderato,
+  transport: http()
+});
+
+const FEE_MANAGER = '0xfeeC000000000000000000000000000000000000';
+
+await client.writeContract({
+  address: FEE_MANAGER,
+  abi: [{
+    name: 'setUserToken',
+    type: 'function',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [],
+    stateMutability: 'nonpayable'
+  }],
+  functionName: 'setUserToken',
+  args: ['0x123...ABC'] // Your preferred stablecoin
+});
+```
+
+### Using Foundry
+
+```solidity
+contract SetFeeToken is Script {
+    function run() external {
+        address FEE_MANAGER = 0xfeeC000000000000000000000000000000000000;
+        address USDC = 0x123...ABC;
+
+        vm.startBroadcast();
+        IFeeManager(FEE_MANAGER).setUserToken(USDC);
+        vm.stopBroadcast();
+    }
+}
+```
+
+<Note>
+Your fee token preference persists across all future transactions until you change it. You only need to set it once.
+</Note>
+
+## Fee Token Requirements
+
+To use a token as a fee payment method, it must:
+
+1. **Be a TIP-20 token** deployed via the TIP20Factory
+2. **Be USD-denominated**: `ITIP20(token).currency()` must return `"USD"`
+3. **Have sufficient balance** in your account to cover `gasLimit × baseFee`
+4. **Allow FeeManager transfers**: Your TIP-403 policy must authorize both:
+   - You as a sender
+   - The FeeManager as a recipient
+5. **Have Fee AMM liquidity** (if validator prefers a different token)
+
+### Checking Your Balance
+
+```bash
+cast call $TOKEN_ADDRESS "balanceOf(address)" $YOUR_ADDRESS
+```
+
+### Checking TIP-403 Authorization
+
+The FeeManager checks authorization during `collectFeePreTx`:
+
+```solidity
+// From FeeManager.sol:47-52
+uint64 policyId = ITIP20(userToken).transferPolicyId();
+if (
+    !TIP403_REGISTRY.isAuthorizedSender(policyId, user) ||
+    !TIP403_REGISTRY.isAuthorizedRecipient(policyId, address(this))
+) {
+    revert ITIP20.PolicyForbids();
+}
+```
+
+If your transfer policy blocks either you as a sender or the FeeManager as a recipient, the transaction will revert during validation.
+
+## How Fee Payment Works
+
+### 1. Fee Token Resolution
+
+Before executing a transaction, the protocol resolves which token will be used:
+
+```
+User's preferred token:      (from setUserToken)
+         ↓
+Validator's preferred token: (from setValidatorToken)
+         ↓
+Fee AMM liquidity check:     (if conversion needed)
+         ↓
+Resolved fee token:          (final choice)
+```
+
+### 2. Maximum Fee Calculation
+
+The protocol calculates the maximum fee the user might pay:
+
+```
+maxFee = gasLimit × baseFee
+```
+
+**Example**:
+
+```
+Gas limit:      500,000 gas
+Base fee:       2,000 aUSD/gas = 2 × 10⁻¹⁵ USD/gas
+Max fee (aUSD): 500,000 × 2,000 = 1,000,000,000 aUSD = 10⁹ aUSD
+Max fee (μUSD): 10⁹ / 10¹² = 1,000 μUSD = 1,000 token units
+Max fee (USD):  $0.001 (0.1 cents)
+```
+
+The user must have at least 1,000 token units of their preferred stablecoin.
+
+### 3. Pre-Transaction Collection
+
+The FeeManager calls `collectFeePreTx` to lock the maximum fee:
+
+```solidity
+function collectFeePreTx(
+    address user,
+    address userToken,
+    uint256 maxAmount
+) external
+```
+
+This:
+- Transfers `maxAmount` from user to FeeManager
+- Checks Fee AMM liquidity (if conversion needed)
+- Reverts if insufficient balance or liquidity
+
+See `FeeManager.sol:38-60`.
+
+### 4. Transaction Execution
+
+The transaction runs normally, consuming gas based on actual operations.
+
+### 5. Post-Transaction Settlement
+
+After execution, `collectFeePostTx` settles the actual fee:
+
+```solidity
+function collectFeePostTx(
+    address user,
+    uint256 maxAmount,
+    uint256 actualUsed,
+    address userToken
+) external
+```
+
+This:
+- Calculates refund: `maxAmount - actualUsed`
+- Returns excess tokens to user
+- Converts `actualUsed` via Fee AMM (if needed)
+- Credits validator with converted tokens
+
+See `FeeManager.sol:62-87`.
+
+**Example**:
+
+```
+Locked:         1,000 USDC (max fee)
+Actual gas:     400,000 gas
+Actual fee:     800 USDC
+Refund:         200 USDC (returned to user)
+Conversion:     800 USDC → 798.4 pathUSD (0.3% spread)
+Validator gets: 798.4 pathUSD
+```
+
+## Fee Conversion via AMM
+
+When your fee token differs from the validator's preferred token, the Fee AMM automatically converts:
+
+### Conversion Rate
+
+```
+outputAmount = inputAmount × 0.9970
+```
+
+This provides a **0.3% conversion spread**.
+
+**Example**:
+
+```
+You pay:            1,000 USDC
+Conversion spread:  1,000 × 0.003 = 3 USDC
+Validator receives: 1,000 × 0.9970 = 997 pathUSD
+```
+
+See [Fee AMM](/protocol/fees/fee-amm) for details on conversion mechanics and liquidity.
+
+### Insufficient Liquidity
+
+If the Fee AMM lacks sufficient liquidity for the conversion, the transaction validation fails:
+
+```solidity
+if (pools[poolId].reserveValidatorToken < amountOutNeeded) {
+    revert InsufficientLiquidity();
+}
+```
+
+In this case, you must either:
+
+1. **Switch fee tokens** to one with liquidity (e.g., pathUSD)
+2. **Wait** for the pool to be rebalanced
+3. **Provide liquidity** yourself to the relevant pool
+
+<Tip>
+**pathUSD** always has the best liquidity because it's the default token for most validators. If conversion fails, try switching to pathUSD.
+</Tip>
+
+## Cost Examples
+
+Assuming base fee = 2,000 aUSD/gas:
+
+### Simple Transfer
+
+**Operation**: Send 100 USDC to a friend
+
+```
+Gas used:       50,000 gas
+Fee (USDC):     50,000 × 2,000 / 10¹² = 100 μUSD = 100 USDC token units
+Fee (USD):      $0.0001 (0.01 cents)
+```
+
+**No conversion needed** if validator also prefers USDC.
+
+### Transfer to New Address
+
+**Operation**: Send 100 USDT to a new recipient (creates their balance storage)
+
+```
+Gas used:       300,000 gas
+Fee (USDT):     300,000 × 2,000 / 10¹² = 600 μUSD = 600 USDT token units
+Fee (USD):      $0.0006 (0.06 cents)
+```
+
+The extra 250,000 gas covers the new storage slot creation.
+
+### With Conversion
+
+**Operation**: Send 100 USDC, but validator prefers pathUSD
+
+```
+Gas used:       50,000 gas
+Base fee:       100 USDC token units
+Conversion:     100 → 99.7 pathUSD (validator receives)
+Total cost:     100 USDC from your balance
+Spread cost:    0.3 USDC (0.3% conversion fee)
+```
+
+You pay the same 100 USDC, but the validator receives 99.7 pathUSD after conversion.
+
+### Smart Contract Interaction
+
+**Operation**: Call a DEX swap function
+
+```
+Gas limit:      800,000 gas
+Gas used:       650,000 gas (actual)
+Max locked:     1,600 μUSD
+Actual fee:     1,300 μUSD
+Refund:         300 μUSD (returned immediately)
+```
+
+## Fee Token Introspection
+
+Smart contracts can query which fee token is being used:
+
+```solidity
+interface IFeeManager {
+    function getFeeToken() external view returns (address);
+}
+
+contract FeeAware {
+    IFeeManager constant FEE_MANAGER = IFeeManager(0xfeeC000000000000000000000000000000000000);
+    address constant PATH_USD = 0x20C0000000000000000000000000000000000000;
+
+    function doSomething() external {
+        address feeToken = FEE_MANAGER.getFeeToken();
+
+        if (feeToken == PATH_USD) {
+            // User is paying in pathUSD
+        } else {
+            // User is paying in a different stablecoin
+        }
+    }
+}
+```
+
+This enables fee-aware contract logic, such as:
+- Adjusting pricing based on fee token
+- Routing decisions that minimize total costs
+- Event logging for fee analytics
+
+See [TIP-1007](/protocol/tips/tip-1007) for the full specification.
+
+## Best Practices
+
+### For Users
+
+1. **Set fee token once**: Your preference persists, no need to set it repeatedly
+2. **Use pathUSD for lowest costs**: Native token typically has best liquidity and no conversion spread
+3. **Maintain buffer balance**: Keep 2-3x expected fees to handle gas price spikes
+4. **Check authorization**: Ensure your TIP-403 policy allows FeeManager transfers
+
+### For Validators
+
+1. **Set preferred token**: Use `setValidatorToken` to receive fees in your chosen stablecoin
+2. **Provide liquidity**: Add liquidity to `(userToken → yourToken)` pools to enable conversions
+3. **Monitor collection**: Call `distributeFees` periodically to claim accumulated fees
+4. **Consider pathUSD**: Default token simplifies liquidity management
+
+<Warning>
+Validators cannot change their fee token **during the same block** they're producing. Attempting to call `setValidatorToken` from the block coinbase address reverts with `CANNOT_CHANGE_WITHIN_BLOCK`.
+</Warning>
+
+### For Developers
+
+1. **Estimate gas accurately**: Use `eth_estimateGas` to avoid over-locking user funds
+2. **Handle conversion failures**: Catch `InsufficientLiquidity` and suggest alternative fee tokens
+3. **Display costs in dollars**: Convert microdollars to human-readable amounts
+4. **Support multiple tokens**: Let users choose their preferred stablecoin
+
+## Common Issues
+
+### "Insufficient Balance"
+
+**Problem**: Transaction reverts during fee validation
+
+**Solutions**:
+- Check balance: `cast call $TOKEN "balanceOf(address)" $YOUR_ADDRESS`
+- Ensure you have enough for both transfer amount AND gas fees
+- Remember: max fee is locked, not actual fee
+
+### "PolicyForbids"
+
+**Problem**: TIP-403 policy blocks the fee transfer
+
+**Solutions**:
+- Verify you're authorized sender: Check your address against token's policy
+- Verify FeeManager is authorized recipient: Check `0xfeeC...0000` against policy
+- If using a restricted token, contact the issuer
+
+### "InsufficientLiquidity"
+
+**Problem**: Fee AMM lacks liquidity for conversion
+
+**Solutions**:
+- Switch to pathUSD (best liquidity)
+- Wait for pool rebalancing
+- Provide liquidity to the pool
+- Check current pool reserves: `FeeAMM.getPool(yourToken, validatorToken)`
+
+### "CANNOT_CHANGE_WITHIN_BLOCK"
+
+**Problem**: Validator trying to change fee token while producing a block
+
+**Solution**: Wait until the next block, then call `setValidatorToken`
+
+## Transaction Lifecycle Example
+
+Here's a complete example of paying fees in USDC:
+
+### Setup
+
+```typescript
+import { createTempoClient } from '@tempoxyz/sdk';
+
+const client = createTempoClient({
+  transport: http('https://rpc.moderato.tempo.xyz')
+});
+
+const USDC = '0x...';
+const FEE_MANAGER = '0xfeeC000000000000000000000000000000000000';
+
+// One-time: Set USDC as fee token
+await client.writeContract({
+  address: FEE_MANAGER,
+  abi: feeManagerAbi,
+  functionName: 'setUserToken',
+  args: [USDC]
+});
+```
+
+### Transaction Submission
+
+```typescript
+// Send a transfer (fee paid in USDC)
+const hash = await client.transfer({
+  token: USDC,
+  to: '0x456...',
+  amount: 100_000_000n // 100 USDC
+});
+
+const receipt = await client.waitForTransactionReceipt({ hash });
+```
+
+### What Happened Behind the Scenes
+
+1. **Validation**:
+   ```
+   - Resolved fee token: USDC
+   - Calculated max fee: 500,000 gas × 2,000 aUSD/gas = 1,000 USDC units
+   - Checked balance: ✓ (you have 100,001,000 USDC)
+   - Checked AMM liquidity: ✓ (sufficient for conversion)
+   ```
+
+2. **Pre-execution**:
+   ```
+   - Locked 1,000 USDC from your balance
+   - Your balance: 100,001,000 → 100,000,000 USDC (1,000 locked in FeeManager)
+   ```
+
+3. **Execution**:
+   ```
+   - Actual gas used: 50,000 gas
+   - Actual fee: 100 USDC units
+   ```
+
+4. **Post-execution**:
+   ```
+   - Refund: 1,000 - 100 = 900 USDC (returned to you)
+   - Conversion: 100 USDC → 99.7 pathUSD (sent to validator)
+   - Your final balance: 100,000,900 - 100,000,000 (transfer) = 99,900,900 USDC
+   ```
+
+5. **Validator collection**:
+   ```
+   - Validator's collected fees: 99.7 pathUSD
+   - Validator calls distributeFees to claim
+   ```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fee AMM" icon="arrows-rotate" href="/protocol/fees/fee-amm">
+    Learn how stablecoin conversion works
+  </Card>
+  <Card title="Gas Pricing" icon="gauge-high" href="/protocol/fees/gas-pricing">
+    Understand gas cost calculations
+  </Card>
+  <Card title="Fee System Overview" icon="circle-info" href="/protocol/fees/overview">
+    High-level overview of fee mechanics
+  </Card>
+  <Card title="TIP-1007" icon="file-lines" href="/protocol/tips/tip-1007">
+    Fee token introspection specification
+  </Card>
+</CardGroup>

@@ -1,0 +1,330 @@
+---
+title: 'Making Payments'
+description: 'Send TIP-20 stablecoin payments with memos for reconciliation'
+icon: 'money-bill-transfer'
+---
+
+Tempo's TIP-20 token standard extends ERC-20 with payment-specific features like on-transfer memos, dedicated payment lanes for predictable throughput, and sub-millidollar transaction costs.
+
+## TIP-20 Overview
+
+TIP-20 tokens are enshrined at the protocol level with precompile addresses starting at `0x20c0...`. They provide:
+
+- **Predictable throughput** via dedicated payment lanes
+- **Native reconciliation** with on-transfer memos
+- **Low fees** targeting &lt;$0.001 per transfer
+- **Compliance** through the TIP-403 policy registry
+
+## Basic Token Transfer
+
+Send a simple TIP-20 transfer using the Tempo Alloy SDK:
+
+<CodeGroup>
+```rust Rust
+use alloy::{
+    primitives::{U256, address},
+    providers::ProviderBuilder,
+};
+use tempo_alloy::{TempoNetwork, contracts::precompiles::ITIP20};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL").expect("No RPC URL set"))
+        .await?;
+
+    // AlphaUSD token at precompile address
+    let token = ITIP20::new(
+        address!("0x20c0000000000000000000000000000000000001"),
+        &provider,
+    );
+
+    let receipt = token
+        .transfer(
+            address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+            U256::from(100_000_000), // 100 tokens (6 decimals)
+        )
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    println!("Transfer successful: {:?}", receipt.transaction_hash);
+
+    Ok(())
+}
+```
+
+```typescript TypeScript
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const TIP20_ABI = [
+  {
+    name: 'transfer',
+    type: 'function',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' }
+    ],
+    outputs: [{ type: 'bool' }]
+  }
+];
+
+const account = privateKeyToAccount(process.env.PRIVATE_KEY);
+
+const client = createWalletClient({
+  account,
+  chain: {
+    id: 42431,
+    name: 'Tempo Testnet',
+    rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } }
+  },
+  transport: http()
+});
+
+const hash = await client.writeContract({
+  address: '0x20c0000000000000000000000000000000000001', // AlphaUSD
+  abi: TIP20_ABI,
+  functionName: 'transfer',
+  args: ['0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb', 100_000_000n]
+});
+
+console.log('Transfer successful:', hash);
+```
+
+```bash CLI (cast)
+cast send 0x20c0000000000000000000000000000000000001 \
+  "transfer(address,uint256)" \
+  0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb \
+  100000000 \
+  --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY
+```
+</CodeGroup>
+
+<Info>
+TIP-20 tokens use 6 decimals by default. To send 100 tokens, use `100_000_000`.
+</Info>
+
+## Transfer with Memo
+
+Add a memo to your transfer for payment reconciliation, invoice tracking, or reference data:
+
+<CodeGroup>
+```rust Rust
+use alloy::{
+    primitives::{B256, U256, address},
+    providers::ProviderBuilder,
+};
+use tempo_alloy::{TempoNetwork, contracts::precompiles::ITIP20};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL").expect("No RPC URL set"))
+        .await?;
+
+    let token = ITIP20::new(
+        address!("0x20c0000000000000000000000000000000000001"),
+        &provider,
+    );
+
+    let receipt = token
+        .transferWithMemo(
+            address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+            U256::from(100_000_000), // 100 tokens (6 decimals)
+            B256::left_padding_from("INV-12345".as_bytes()),
+        )
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    println!("Transfer successful: {:?}", receipt.transaction_hash);
+
+    Ok(())
+}
+```
+
+```typescript TypeScript
+const TIP20_ABI = [
+  {
+    name: 'transferWithMemo',
+    type: 'function',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'memo', type: 'bytes32' }
+    ],
+    outputs: [{ type: 'bool' }]
+  }
+];
+
+// Convert string to bytes32 (left-padded)
+const memo = '0x494e562d3132333435' + '0'.repeat(46); // "INV-12345" padded
+
+const hash = await client.writeContract({
+  address: '0x20c0000000000000000000000000000000000001',
+  abi: TIP20_ABI,
+  functionName: 'transferWithMemo',
+  args: [
+    '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb',
+    100_000_000n,
+    memo
+  ]
+});
+```
+
+```bash CLI (cast)
+cast send 0x20c0000000000000000000000000000000000001 \
+  "transferWithMemo(address,uint256,bytes32)" \
+  0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb \
+  100000000 \
+  0x494e562d31323334350000000000000000000000000000000000000000000000 \
+  --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY
+```
+</CodeGroup>
+
+## Memo Patterns
+
+TIP-20 supports multiple memo patterns for different use cases:
+
+### Direct Memo (32 bytes)
+
+Store small identifiers directly on-chain:
+
+```rust
+// Invoice number
+let memo = B256::left_padding_from("INV-12345".as_bytes());
+
+// UUID (16 bytes)
+let uuid = uuid::Uuid::new_v4();
+let memo = B256::left_padding_from(uuid.as_bytes());
+```
+
+### Hash Commitment
+
+Store a hash of off-chain data for privacy:
+
+```rust
+use alloy::primitives::keccak256;
+
+// Hash sensitive payment data
+let payment_details = "Invoice INV-12345, Customer: Acme Corp, Amount: $100";
+let memo = keccak256(payment_details.as_bytes());
+
+token.transferWithMemo(recipient, amount, memo).send().await?;
+```
+
+### Locator Pattern
+
+Reference external data systems:
+
+```rust
+// IPFS CID (first 32 bytes)
+let ipfs_cid = "QmX..."; // Your IPFS hash
+let memo = B256::left_padding_from(ipfs_cid.as_bytes());
+
+// Database ID
+let db_id = "payment_12345";
+let memo = B256::left_padding_from(db_id.as_bytes());
+```
+
+## Watching for Incoming Payments
+
+Listen for incoming TIP-20 transfers to your address:
+
+```rust
+use alloy::{
+    primitives::address,
+    providers::ProviderBuilder,
+    rpc::types::Filter,
+};
+use tempo_alloy::{TempoNetwork, contracts::precompiles::ITIP20};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    let token = ITIP20::new(
+        address!("0x20c0000000000000000000000000000000000001"),
+        &provider,
+    );
+
+    let my_address = address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb");
+
+    // Subscribe to Transfer events where 'to' is my address
+    let filter = token.Transfer_filter()
+        .to_owned()
+        .to(my_address);
+
+    let mut stream = provider.subscribe_logs(&filter).await?.into_stream();
+
+    println!("Watching for incoming payments...");
+
+    while let Some(log) = stream.next().await {
+        let transfer = token.decode_event::<ITIP20::Transfer>(&log)?;
+        println!(
+            "Received {} from {:?}",
+            transfer.value,
+            transfer.from
+        );
+    }
+
+    Ok(())
+}
+```
+
+## Available Tokens
+
+Tempo testnet provides several TIP-20 stablecoins:
+
+| Token | Address | Decimals |
+|-------|---------|----------|
+| AlphaUSD | `0x20c0000000000000000000000000000000000001` | 6 |
+| BetaUSD | `0x20c0000000000000000000000000000000000002` | 6 |
+| GammaUSD | `0x20c0000000000000000000000000000000000003` | 6 |
+| DeltaUSD | `0x20c0000000000000000000000000000000000004` | 6 |
+
+<Tip>
+Use the faucet to get test tokens: `cast rpc tempo_fundAddress <ADDRESS> --rpc-url https://rpc.moderato.tempo.xyz`
+</Tip>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use memos for reconciliation">
+    Always include memos for business payments to enable automatic reconciliation with your accounting systems.
+  </Accordion>
+  <Accordion title="Hash sensitive data">
+    Never put PII or sensitive information directly in memos. Use hash commitments and store full data off-chain.
+  </Accordion>
+  <Accordion title="Check allowances first">
+    Before calling `transferFrom`, verify the spender has sufficient allowance.
+  </Accordion>
+  <Accordion title="Handle decimal conversions">
+    TIP-20 tokens use 6 decimals. Always convert user-facing amounts correctly.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Batch Payments" icon="layer-group" href="/guides/batch-payments">
+    Send multiple payments atomically in a single transaction
+  </Card>
+  <Card title="Fee Sponsorship" icon="hand-holding-dollar" href="/guides/fee-sponsorship">
+    Pay gas fees for your users to streamline onboarding
+  </Card>
+  <Card title="TIP-20 Protocol" icon="book" href="/protocol/tip20/overview">
+    Learn more about the TIP-20 standard
+  </Card>
+  <Card title="Smart Accounts" icon="key" href="/guides/smart-accounts">
+    Enable passkey-based payments
+  </Card>
+</CardGroup>

@@ -1,0 +1,103 @@
+---
+title: TIPs Overview
+description: Tempo Improvement Proposals (TIPs) are design documents that specify protocol changes, new features, and standards for Tempo blockchain.
+---
+
+# Tempo Improvement Proposals (TIPs)
+
+Tempo Improvement Proposals (TIPs) are design documents providing information to the Tempo community, describing new features, protocol changes, or improvements to existing functionality. TIPs are the primary mechanism for proposing changes to the Tempo protocol and documenting design decisions.
+
+## What is a TIP?
+
+A TIP is a technical specification that describes:
+- Protocol-level changes (gas costs, consensus rules, transaction formats)
+- New precompile functions or interfaces
+- Token standards and their implementations
+- Economic parameters and fee structures
+
+TIPs follow a structured format including motivation, specification, invariants, and test cases to ensure changes are well-documented and thoroughly reviewed.
+
+## TIP Status
+
+Each TIP has a status indicating its current stage:
+
+- **Draft**: Proposal is under active development and discussion
+- **In Review**: Specification is complete and undergoing review
+- **Mainnet**: Implemented and deployed on Tempo mainnet
+
+## All TIPs
+
+### Mainnet (Deployed)
+
+<CardGroup cols={2}>
+  <Card title="TIP-1000: State Creation Cost Increase" href="/protocol/tips/tip-1000" icon="coins">
+    Increased gas costs for state creation operations to protect against state growth attacks. **Protocol Version: T1**
+  </Card>
+  
+  <Card title="TIP-1009: Expiring Nonces" href="/protocol/tips/tip-1009" icon="clock">
+    Time-bounded replay protection using transaction hashes instead of sequential nonce management. **Protocol Version: T1**
+  </Card>
+  
+  <Card title="TIP-1010: Mainnet Gas Parameters" href="/protocol/tips/tip-1010" icon="gauge">
+    Initial gas parameters for Tempo mainnet including base fee pricing and transaction gas limits. **Protocol Version: T1**
+  </Card>
+</CardGroup>
+
+### In Review
+
+<CardGroup cols={2}>
+  <Card title="TIP-1004: Permit for TIP-20" href="/protocol/tips/tip-1004" icon="signature">
+    EIP-2612 permit functionality for gasless approvals via off-chain signatures. **Protocol Version: T2**
+  </Card>
+  
+  <Card title="TIP-1006: Burn At for TIP-20" href="/protocol/tips/tip-1006" icon="fire">
+    Authorized administrators can burn tokens from any address without transfer policy restrictions. **Protocol Version: TBD**
+  </Card>
+  
+  <Card title="TIP-1007: Fee Token Introspection" href="/protocol/tips/tip-1007" icon="magnifying-glass">
+    Smart contracts can query which TIP-20 token is paying for gas fees in the current transaction. **Protocol Version: TBD**
+  </Card>
+  
+  <Card title="TIP-1015: Compound Transfer Policies" href="/protocol/tips/tip-1015" icon="layer-group">
+    Different authorization rules for senders, recipients, and mint recipients in TIP-403 policies. **Protocol Version: T2**
+  </Card>
+  
+  <Card title="TIP-1016: Exempt Storage Creation from Gas Limits" href="/protocol/tips/tip-1016" icon="database">
+    Storage creation gas costs don't count against transaction or block gas limits. **Protocol Version: TBD**
+  </Card>
+  
+  <Card title="TIP-1017: ValidatorConfig V2" href="/protocol/tips/tip-1017" icon="server">
+    Append-only validator configuration with historical state reconstruction. **Protocol Version: T2**
+  </Card>
+</CardGroup>
+
+### Draft
+
+<CardGroup cols={2}>
+  <Card title="TIP-1001: Place-only Mode for Next Quote Token" href="/protocol/tips/tip-1001" icon="book">
+    DEX function for creating trading pairs against a token's staged next quote token.
+  </Card>
+  
+  <Card title="TIP-1002: Prevent Crossed Orders" href="/protocol/tips/tip-1002" icon="ban">
+    Prevent placing orders that cross existing orders and allow same-tick flip orders.
+  </Card>
+  
+  <Card title="TIP-1003: Client Order IDs" href="/protocol/tips/tip-1003" icon="id-card">
+    Optional client order IDs for idempotency and easier order tracking in the DEX.
+  </Card>
+  
+  <Card title="TIP-1005: Fix Ask Swap Rounding Loss" href="/protocol/tips/tip-1005" icon="bug">
+    Fix rounding bug in DEX where partial fills on ask orders can lose quote tokens.
+  </Card>
+  
+  <Card title="TIP-1011: Enhanced Access Key Permissions" href="/protocol/tips/tip-1011" icon="key">
+    Periodic spending limits and destination address scoping for Access Keys. **Protocol Version: TBD (requires hardfork)**
+  </Card>
+</CardGroup>
+
+## Related Documentation
+
+- [Transactions](/protocol/transactions/overview) - Transaction format and execution
+- [Fees](/protocol/fees/overview) - Fee mechanisms and gas economics
+- [TIP-20 Tokens](/protocol/tip20/overview) - Token standard specification
+- [Precompiles](/protocol/precompiles/overview) - System contract interfaces

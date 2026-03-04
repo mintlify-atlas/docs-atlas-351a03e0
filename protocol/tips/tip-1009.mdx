@@ -1,0 +1,202 @@
+---
+title: "TIP-1009: Expiring Nonces"
+description: Time-bounded replay protection using transaction hashes instead of sequential nonce management.
+---
+
+# TIP-1009: Expiring Nonces
+
+<Note>
+**Protocol Version**: T1  
+**Status**: Mainnet  
+**Authors**: Tempo Team  
+**Related**: TIP-20, Transactions
+</Note>
+
+## Abstract
+
+TIP-1009 introduces expiring nonces, an alternative replay protection mechanism where transactions are valid only within a specified time window. Instead of tracking sequential nonces, the protocol uses transaction hashes with expiry timestamps to prevent replay attacks. This enables use cases like gasless transactions, meta-transactions, and simplified UX where users don't need to manage nonce ordering.
+
+## Motivation
+
+Traditional sequential nonces require careful ordering—if transaction N fails or is delayed, all subsequent transactions (N+1, N+2, ...) are blocked. This creates friction for:
+
+1. **Gasless/Meta-transactions**: Relayers need complex nonce management across multiple users
+2. **Parallel submission**: Users cannot submit multiple independent transactions simultaneously
+3. **Recovery from failures**: Stuck transactions require explicit cancellation with the same nonce
+
+Expiring nonces solve these problems by using time-based validity instead of sequence-based ordering. Each transaction is uniquely identified by its hash and is valid only until a specified `validBefore` timestamp.
+
+---
+
+# Specification
+
+## Nonce Key
+
+Expiring nonce transactions use a reserved nonce key:
+
+```
+TEMPO_EXPIRING_NONCE_KEY = uint256.max (2^256 - 1)
+```
+
+When a Tempo transaction specifies `nonceKey = uint256.max`, the protocol treats it as an expiring nonce transaction.
+
+## Transaction Fields
+
+Expiring nonce transactions require:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nonceKey` | `uint256` | Must be `uint256.max` to indicate expiring nonce mode |
+| `nonce` | `uint64` | Must be `0` (unused, validated for consistency) |
+| `validBefore` | `uint64` | Unix timestamp (seconds) after which the transaction is invalid |
+
+## Validity Window
+
+The `validBefore` timestamp must satisfy:
+
+```
+now < validBefore <= now + MAX_EXPIRY_SECS
+```
+
+Where:
+- `now` is the current block timestamp
+- `MAX_EXPIRY_SECS = 30` seconds
+
+Transactions with `validBefore` in the past or more than 30 seconds in the future are rejected.
+
+## Replay Protection
+
+Replay protection uses a **circular buffer** data structure in the Nonce precompile:
+
+### Storage Layout
+
+```solidity
+contract Nonce {
+    // Existing 2D nonce storage
+    mapping(address => mapping(uint256 => uint64)) public nonces;           // slot 0
+
+    // Expiring nonce storage
+    mapping(bytes32 => uint64) public expiringNonceSeen;                    // slot 1: txHash => expiry
+    mapping(uint32 => bytes32) public expiringNonceRing;                    // slot 2: circular buffer
+    uint32 public expiringNonceRingPtr;                                     // slot 3: buffer pointer
+}
+```
+
+### Circular Buffer Design
+
+The circular buffer has a fixed capacity:
+
+```
+EXPIRING_NONCE_SET_CAPACITY = 300,000
+```
+
+This capacity is sized for 10,000 TPS × 30 seconds = 300,000 transactions, ensuring entries expire before being overwritten.
+
+### Algorithm
+
+When processing an expiring nonce transaction:
+
+1. **Validate expiry window**: Reject if `validBefore <= now` or `validBefore > now + 30`
+
+2. **Replay check**: Read `expiringNonceSeen[txHash]`
+   - If entry exists and `expiry > now`, reject as replay
+
+3. **Get buffer position**: Read `expiringNonceRingPtr`, compute `idx = ptr % CAPACITY`
+
+4. **Read existing entry**: Read `expiringNonceRing[idx]` to get `oldHash`
+
+5. **Eviction check** (safety): If `oldHash != 0`:
+   - Read `expiringNonceSeen[oldHash]`
+   - If `expiry > now`, reject (buffer full of valid entries)
+   - Clear `expiringNonceSeen[oldHash] = 0`
+
+6. **Insert new entry**:
+   - Write `expiringNonceRing[idx] = txHash`
+   - Write `expiringNonceSeen[txHash] = validBefore`
+
+7. **Advance pointer**: Write `expiringNonceRingPtr = ptr + 1`
+
+## Gas Costs
+
+The intrinsic gas cost for expiring nonce transactions includes:
+
+```
+EXPIRING_NONCE_GAS = 2 * COLD_SLOAD_COST + WARM_SLOAD_COST + 3 * WARM_SSTORE_RESET
+                   = 2 * 2100 + 100 + 3 * 2900
+                   = 13,000 gas
+```
+
+**Included operations:**
+- 2 cold SLOADs: `seen[txHash]`, `ring[idx]` (unique slots per tx)
+- 1 warm SLOAD: `seen[oldHash]` (warm because we just read `ring[idx]` which points to it)
+- 3 SSTOREs at RESET price: `seen[oldHash]=0`, `ring[idx]`, `seen[txHash]`
+
+<Note>
+**Why SSTORE_RESET (2,900) instead of SSTORE_SET (20,000) for `seen[txHash]`:**
+
+SSTORE_SET cost exists to penalize permanent state growth. Expiring nonce data is ephemeral: evicted within 30 seconds, fixed-size buffer (300k entries). No permanent state growth, so the 20k penalty doesn't apply.
+</Note>
+
+## Interaction with Other Features
+
+### 2D Nonces
+
+Expiring nonces and 2D nonces are mutually exclusive:
+- `nonceKey = 0`: Protocol nonce (standard sequential)
+- `nonceKey = 1..uint256.max-1`: 2D nonce keys
+- `nonceKey = uint256.max`: Expiring nonce mode
+
+### Access Keys (Keychain)
+
+Expiring nonces work with access key signatures. The `validBefore` provides an additional security boundary—even if an access key is compromised, transactions signed with it become invalid after the expiry window.
+
+### Fee Tokens
+
+Expiring nonce transactions pay fees in TIP-20 fee tokens like any other Tempo transaction.
+
+---
+
+# Invariants
+
+## Must Hold
+
+| ID | Invariant | Description |
+|----|-----------|-------------|
+| **E1** | No replay | A transaction hash can never be executed twice (changing `validBefore` produces a different hash) |
+| **E2** | Expiry enforcement | Transactions with `validBefore <= now` must be rejected |
+| **E3** | Window bounds | Transactions with `validBefore > now + MAX_EXPIRY_SECS` must be rejected |
+| **E4** | Nonce must be zero | Expiring nonce transactions must have `nonce == 0` |
+| **E5** | Valid before required | Expiring nonce transactions must have `validBefore` set |
+| **E6** | No nonce mutation | Expiring nonce txs do not increment protocol nonce or any 2D nonce |
+| **E7** | Concurrent independence | Multiple expiring nonce txs from same sender can execute in same block |
+
+## Benchmark Results
+
+Benchmarks were run to measure state savings from expiring nonces compared to 2D nonces.
+
+### Key Findings
+
+| Metric | Value |
+|--------|-------|
+| Per-transaction state savings | ~100 bytes |
+| Circular buffer capacity | 300,000 entries |
+| Buffer fills at 5k TPS | ~60 seconds |
+
+### Controlled Benchmark (100k transactions at 5k TPS)
+
+| Nonce Type | Final DB Size | Transactions |
+|------------|---------------|--------------|
+| 2D Nonces | 4,342.85 MB | 100,000 |
+| Expiring Nonces | 4,332.18 MB | 100,000 |
+| **Difference** | **-10.67 MB** | - |
+
+The ~107 bytes per transaction overhead includes MPT node overhead, MDBX metadata, and RLP encoding.
+
+### Scaling Projections
+
+| TPS | Daily Transactions | Daily State Savings |
+|-----|-------------------|---------------------|
+| 5,000 | 432M | 43.2 GB |
+| 10,000 | 864M | 86.4 GB |
+
+After the circular buffer fills, expiring nonces maintain constant storage while 2D nonces grow by ~100 bytes per transaction.

@@ -1,0 +1,442 @@
+---
+title: 'Fee Sponsorship'
+description: 'Pay gas fees for your users to streamline onboarding and improve UX'
+icon: 'hand-holding-dollar'
+---
+
+Tempo Transactions support fee sponsorship, allowing applications to pay gas fees on behalf of users. This eliminates a major onboarding barrier and enables seamless payment experiences without requiring users to hold gas tokens.
+
+## Why Fee Sponsorship?
+
+Fee sponsorship unlocks critical use cases:
+
+- **Frictionless onboarding**: New users can transact immediately without acquiring gas tokens
+- **Enterprise adoption**: Businesses can absorb transaction costs for customers
+- **Mobile wallets**: Simplify mobile payment flows
+- **Gasless transactions**: End users never see or think about gas
+- **Flexible business models**: Charge fees separately or absorb costs
+
+## How Fee Sponsorship Works
+
+In a sponsored transaction:
+
+1. **User signs** the transaction with their key (including tx hash)
+2. **Sponsor signs** a separate `fee_payer_signature` committing to pay gas
+3. **Transaction executes** with sponsor paying all gas fees
+4. **User's balance** is unaffected by gas costs
+
+The sponsor signature binds to the specific sender and transaction, preventing replay attacks.
+
+## Basic Fee Sponsorship
+
+Here's how to sponsor a transaction for a user:
+
+<CodeGroup>
+```rust Rust
+use alloy::{
+    network::TransactionBuilder,
+    primitives::{Address, U256, address},
+    providers::{Provider, ProviderBuilder},
+    signers::local::PrivateKeySigner,
+    sol_types::SolCall,
+};
+use tempo_alloy::{
+    TempoNetwork,
+    contracts::precompiles::ITIP20,
+    primitives::transaction::Call,
+    rpc::TempoTransactionRequest,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    // User's signer (they sign the transaction)
+    let user_signer = PrivateKeySigner::from_bytes(&hex::decode("...")?.into())?;
+    let user_address = user_signer.address();
+
+    // Sponsor's signer (they pay the gas)
+    let sponsor_signer = PrivateKeySigner::from_bytes(&hex::decode("...")?.into())?;
+
+    // Build the user's transaction
+    let token_address = address!("0x20c0000000000000000000000000000000000001");
+    let recipient = address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb");
+
+    let calls = vec![Call {
+        to: token_address.into(),
+        input: ITIP20::transferCall {
+            to: recipient,
+            amount: U256::from(100_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    }];
+
+    let mut tx_request = TempoTransactionRequest {
+        calls,
+        from: Some(user_address),
+        ..Default::default()
+    };
+
+    // Get the nonce for the user
+    let nonce = provider.get_transaction_count(user_address).await?;
+    tx_request = tx_request.nonce(nonce);
+
+    // User signs the transaction
+    let user_signed_tx = tx_request.build(&user_signer).await?;
+
+    // Sponsor computes the fee payer signature hash
+    let fee_payer_hash = user_signed_tx.fee_payer_signature_hash();
+    let sponsor_signature = sponsor_signer.sign_hash(&fee_payer_hash).await?;
+
+    // Attach sponsor signature
+    let sponsored_tx = user_signed_tx.with_fee_payer_signature(sponsor_signature);
+
+    // Send the sponsored transaction
+    let pending = provider.send_raw_transaction(&sponsored_tx.encoded_2718()).await?;
+    
+    println!("Sponsored transaction sent: {:?}", pending.tx_hash());
+    println!("User: {:?}", user_address);
+    println!("Sponsor: {:?}", sponsor_signer.address());
+
+    Ok(())
+}
+```
+
+```typescript TypeScript
+import { createWalletClient, http, parseEther } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { keccak256, encodePacked } from 'viem';
+
+// User account (signs the transaction)
+const userAccount = privateKeyToAccount('0x...');
+
+// Sponsor account (pays the gas)
+const sponsorAccount = privateKeyToAccount('0x...');
+
+const client = createWalletClient({
+  chain: {
+    id: 42431,
+    name: 'Tempo Testnet',
+    rpcUrls: { default: { http: ['https://rpc.moderato.tempo.xyz'] } }
+  },
+  transport: http()
+});
+
+// Build the user's transaction
+const userTx = {
+  from: userAccount.address,
+  type: '0x76', // Tempo Transaction
+  calls: [{
+    to: '0x20c0000000000000000000000000000000000001',
+    value: 0n,
+    data: '0x...' // Encoded transfer call
+  }],
+  nonce: await client.getTransactionCount({ address: userAccount.address }),
+  chainId: 42431
+};
+
+// User signs
+const userSignature = await userAccount.signTransaction(userTx);
+
+// Compute fee payer signature hash
+const feePayerHash = keccak256(
+  encodePacked(
+    ['bytes1', 'bytes32', 'address'],
+    ['0x78', userTx.hash, userAccount.address] // 0x78 = FEE_PAYER_MAGIC_BYTE
+  )
+);
+
+// Sponsor signs the fee payer hash
+const sponsorSignature = await sponsorAccount.signMessage({ message: feePayerHash });
+
+// Attach sponsor signature and send
+const sponsoredTx = {
+  ...userTx,
+  signature: userSignature,
+  feePayerSignature: sponsorSignature
+};
+
+const hash = await client.sendRawTransaction({ serialized: encodeTx(sponsoredTx) });
+console.log('Sponsored tx:', hash);
+```
+</CodeGroup>
+
+<Info>
+The sponsor must have sufficient balance in the fee token (stablecoin) to cover gas costs.
+</Info>
+
+## Sponsor Service Pattern
+
+Build a backend service that sponsors transactions for your users:
+
+```rust
+use axum::{Json, extract::State, http::StatusCode};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+struct SponsorRequest {
+    user_address: Address,
+    transaction: TempoTransactionRequest,
+}
+
+#[derive(Serialize)]
+struct SponsorResponse {
+    transaction_hash: String,
+    sponsored_by: Address,
+}
+
+// API endpoint to sponsor user transactions
+async fn sponsor_transaction(
+    State(sponsor_signer): State<PrivateKeySigner>,
+    State(provider): State<Provider>,
+    Json(request): Json<SponsorRequest>,
+) -> Result<Json<SponsorResponse>, StatusCode> {
+    // Validate the user's transaction
+    if !is_valid_transaction(&request.transaction) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Check sponsor's balance
+    let sponsor_address = sponsor_signer.address();
+    let balance = provider
+        .get_balance(sponsor_address)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if balance < estimate_gas_cost(&request.transaction) {
+        return Err(StatusCode::PAYMENT_REQUIRED);
+    }
+
+    // Build and sign as sponsor
+    let mut tx = request.transaction.clone();
+    tx.from = Some(request.user_address);
+
+    // Get user to sign their transaction (via separate flow)
+    let user_signed_tx = get_user_signature(&tx, request.user_address).await?;
+
+    // Sponsor signs the fee payer hash
+    let fee_payer_hash = user_signed_tx.fee_payer_signature_hash();
+    let sponsor_signature = sponsor_signer
+        .sign_hash(&fee_payer_hash)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let sponsored_tx = user_signed_tx.with_fee_payer_signature(sponsor_signature);
+
+    // Send transaction
+    let pending = provider
+        .send_raw_transaction(&sponsored_tx.encoded_2718())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SponsorResponse {
+        transaction_hash: format!("{:?}", pending.tx_hash()),
+        sponsored_by: sponsor_address,
+    }))
+}
+
+fn is_valid_transaction(tx: &TempoTransactionRequest) -> bool {
+    // Implement validation:
+    // - Check gas limits
+    // - Validate call targets (whitelist)
+    // - Rate limiting per user
+    // - Transaction value limits
+    true
+}
+```
+
+## Conditional Sponsorship
+
+Implement policies to control when you sponsor transactions:
+
+```rust
+enum SponsorshipPolicy {
+    AlwaysSponsor,
+    OnboardingOnly { max_transactions: u32 },
+    WhitelistedUsers { addresses: Vec<Address> },
+    ValueThreshold { max_value: U256 },
+    Custom(Box<dyn Fn(&TempoTransactionRequest) -> bool>),
+}
+
+impl SponsorshipPolicy {
+    fn should_sponsor(
+        &self,
+        tx: &TempoTransactionRequest,
+        user: Address,
+        tx_count: u32,
+    ) -> bool {
+        match self {
+            Self::AlwaysSponsor => true,
+            Self::OnboardingOnly { max_transactions } => tx_count < *max_transactions,
+            Self::WhitelistedUsers { addresses } => addresses.contains(&user),
+            Self::ValueThreshold { max_value } => {
+                tx.calls.iter().all(|call| call.value <= *max_value)
+            }
+            Self::Custom(predicate) => predicate(tx),
+        }
+    }
+}
+
+// Usage
+let policy = SponsorshipPolicy::OnboardingOnly { max_transactions: 10 };
+
+if policy.should_sponsor(&tx_request, user_address, user_tx_count) {
+    // Sponsor the transaction
+    let sponsored_tx = sponsor_transaction(tx_request, sponsor_signer).await?;
+    provider.send_raw_transaction(&sponsored_tx.encoded_2718()).await?;
+} else {
+    // User pays their own gas
+    provider.send_transaction(tx_request).await?;
+}
+```
+
+## Fee Sponsorship + Batch Payments
+
+Combine fee sponsorship with batch payments for maximum efficiency:
+
+```rust
+// User wants to send multiple payments, sponsor pays gas
+let calls = vec![
+    Call {
+        to: token_address.into(),
+        input: ITIP20::transferCall {
+            to: recipient1,
+            amount: U256::from(100_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+    Call {
+        to: token_address.into(),
+        input: ITIP20::transferCall {
+            to: recipient2,
+            amount: U256::from(50_000_000),
+        }
+        .abi_encode()
+        .into(),
+        value: U256::ZERO,
+    },
+];
+
+let tx_request = TempoTransactionRequest {
+    calls,
+    from: Some(user_address),
+    ..Default::default()
+};
+
+// Sponsor signs and sends
+let sponsored = sponsor_and_send(tx_request, user_signer, sponsor_signer).await?;
+```
+
+## Security Considerations
+
+<AccordionGroup>
+  <Accordion title="Rate limiting">
+    Implement per-user rate limits to prevent abuse of your sponsorship service.
+  </Accordion>
+  <Accordion title="Transaction validation">
+    Validate all user transactions before sponsoring. Whitelist contract targets and limit values.
+  </Accordion>
+  <Accordion title="Sponsor key security">
+    Protect sponsor private keys. Use hardware security modules (HSMs) for production.
+  </Accordion>
+  <Accordion title="Balance monitoring">
+    Monitor sponsor account balances and set up alerts for low balances.
+  </Accordion>
+  <Accordion title="Replay protection">
+    The fee payer signature binds to the sender address, preventing cross-user replay.
+  </Accordion>
+</AccordionGroup>
+
+## Cost Management
+
+Manage sponsorship costs effectively:
+
+```rust
+struct SponsorshipMetrics {
+    total_sponsored: u64,
+    total_cost: U256,
+    users_sponsored: HashMap<Address, UserMetrics>,
+}
+
+struct UserMetrics {
+    transaction_count: u32,
+    total_gas_cost: U256,
+    first_sponsored: u64, // timestamp
+    last_sponsored: u64,
+}
+
+impl SponsorshipMetrics {
+    fn record_sponsorship(
+        &mut self,
+        user: Address,
+        gas_cost: U256,
+        timestamp: u64,
+    ) {
+        self.total_sponsored += 1;
+        self.total_cost += gas_cost;
+
+        let user_metrics = self.users_sponsored.entry(user).or_insert(UserMetrics {
+            transaction_count: 0,
+            total_gas_cost: U256::ZERO,
+            first_sponsored: timestamp,
+            last_sponsored: timestamp,
+        });
+
+        user_metrics.transaction_count += 1;
+        user_metrics.total_gas_cost += gas_cost;
+        user_metrics.last_sponsored = timestamp;
+    }
+
+    fn cost_per_user(&self, user: Address) -> Option<U256> {
+        self.users_sponsored
+            .get(&user)
+            .map(|m| m.total_gas_cost)
+    }
+}
+```
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Mobile Wallets" icon="mobile">
+    Enable seamless payments without gas management
+  </Card>
+  <Card title="Enterprise Payments" icon="building">
+    Absorb transaction costs for business customers
+  </Card>
+  <Card title="Gaming" icon="gamepad">
+    Let players transact without cryptocurrency knowledge
+  </Card>
+  <Card title="Onboarding" icon="user-plus">
+    Remove friction for new users during first transactions
+  </Card>
+  <Card title="Loyalty Programs" icon="gift">
+    Sponsor transactions for rewards program members
+  </Card>
+  <Card title="Microtransactions" icon="coins">
+    Enable small payments without visible gas fees
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Batch Payments" icon="layer-group" href="/guides/batch-payments">
+    Combine fee sponsorship with atomic batch operations
+  </Card>
+  <Card title="Smart Accounts" icon="key" href="/guides/smart-accounts">
+    Use access keys with sponsored transactions
+  </Card>
+  <Card title="Tempo Transaction" icon="book" href="/concepts/tempo-transactions">
+    Learn more about Tempo Transaction capabilities
+  </Card>
+  <Card title="Making Payments" icon="money-bill-transfer" href="/guides/making-payments">
+    Return to basic payment operations
+  </Card>
+</CardGroup>

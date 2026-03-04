@@ -1,0 +1,145 @@
+---
+title: Transaction Types Overview
+description: Overview of the two transaction types supported by Tempo Protocol
+---
+
+Tempo Protocol supports two distinct transaction types: **Tempo Transactions** (type `0x76`) and **Standard EVM Transactions**. Each type serves different use cases and has unique characteristics.
+
+## Transaction Types
+
+### Tempo Transaction (Type 0x76)
+
+Tempo Transactions are Tempo's native transaction format, designed for high-throughput payment systems and modern account abstraction features.
+
+**Key Features:**
+- Multiple signature types (secp256k1, P256, WebAuthn)
+- Batch execution (multiple calls in a single transaction)
+- 2D nonce system for parallel transaction submission
+- Expiring nonces for time-based replay protection
+- Gas sponsorship via fee payer signatures
+- Optional fee token preference
+- EIP-7702 delegation support with Tempo signatures
+- Key authorization for adding access keys
+
+**Use Cases:**
+- Payment applications requiring high throughput
+- Gasless transactions and meta-transactions
+- Smart contract wallets and account abstraction
+- Applications needing WebAuthn or passkey support
+- Batch operations (multiple transfers, state updates)
+
+[Learn more about Tempo Transactions →](/protocol/transactions/tempo-transaction)
+
+### Standard EVM Transactions
+
+Tempo supports all standard Ethereum transaction types for compatibility with existing tools and wallets.
+
+**Supported Types:**
+- **Legacy (Type 0x00)**: Original Ethereum transactions with `gasPrice`
+- **EIP-2930 (Type 0x01)**: Access list transactions
+- **EIP-1559 (Type 0x02)**: Dynamic fee transactions with `maxFeePerGas` and `maxPriorityFeePerGas`
+- **EIP-7702 (Type 0x04)**: Set Code transactions for account delegation
+
+**Note:** EIP-4844 (blob transactions) are not supported, as Tempo uses a different approach to data availability.
+
+**Use Cases:**
+- Existing wallet compatibility (MetaMask, hardware wallets)
+- Standard Ethereum contracts and dApps
+- Tools expecting standard EVM transaction formats
+
+[Learn more about EVM Transactions →](/protocol/transactions/evm-transactions)
+
+## When to Use Each Type
+
+### Use Tempo Transactions When:
+
+- **High throughput**: Processing payments or transactions at scale
+- **Parallel execution**: Submitting multiple independent transactions simultaneously
+- **Gasless UX**: Implementing gas sponsorship or meta-transactions
+- **Alternative signatures**: Using WebAuthn, passkeys, or P256 keys
+- **Batch operations**: Executing multiple calls atomically
+- **Flexible nonces**: Using expiring nonces or 2D nonces for better UX
+
+### Use EVM Transactions When:
+
+- **Wallet compatibility**: Using existing wallets (MetaMask, Ledger, etc.)
+- **Standard tooling**: Working with standard Ethereum development tools
+- **Simple transfers**: Standard ETH or token transfers
+- **Existing contracts**: Interacting with contracts expecting standard EVM txs
+
+## Transaction Structure Comparison
+
+<table>
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th>Tempo Transaction</th>
+      <th>EVM Transaction</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Type ID</td>
+      <td><code>0x76</code></td>
+      <td><code>0x00</code>, <code>0x01</code>, <code>0x02</code>, <code>0x04</code></td>
+    </tr>
+    <tr>
+      <td>Signatures</td>
+      <td>secp256k1, P256, WebAuthn</td>
+      <td>secp256k1 only</td>
+    </tr>
+    <tr>
+      <td>Calls per Transaction</td>
+      <td>Multiple (batch)</td>
+      <td>Single</td>
+    </tr>
+    <tr>
+      <td>Nonce System</td>
+      <td>2D nonces + expiring nonces</td>
+      <td>Sequential only</td>
+    </tr>
+    <tr>
+      <td>Gas Sponsorship</td>
+      <td>Built-in via fee payer</td>
+      <td>Not supported</td>
+    </tr>
+    <tr>
+      <td>Fee Token</td>
+      <td>Optional preference</td>
+      <td>Native token only</td>
+    </tr>
+    <tr>
+      <td>Access Lists</td>
+      <td>Supported (EIP-2930)</td>
+      <td>Supported (EIP-2930+)</td>
+    </tr>
+    <tr>
+      <td>Authorization Lists</td>
+      <td>Tempo-style (EIP-7702 adapted)</td>
+      <td>Standard EIP-7702</td>
+    </tr>
+  </tbody>
+</table>
+
+## Gas Considerations
+
+### Tempo Transactions
+
+- **Base cost**: Standard EIP-1559 dynamic fees
+- **Expiring nonce cost**: ~13,000 gas for time-based replay protection
+- **Batch optimization**: Multiple calls share base transaction overhead
+- **Fee token**: Optional TIP-20 token for fee payment
+
+### EVM Transactions
+
+- **Standard costs**: Standard Ethereum gas pricing
+- **No batch support**: Each operation requires a separate transaction
+- **Sequential nonces**: Must manage nonce ordering carefully
+
+## Related Documentation
+
+- [Tempo Transaction Specification](/protocol/transactions/tempo-transaction)
+- [EVM Transaction Support](/protocol/transactions/evm-transactions)
+- [Nonce Systems](/protocol/precompiles/nonce)
+- [Gas and Fees](/protocol/fees/overview)
+- [Signature Types](/concepts/tempo-transactions)

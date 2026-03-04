@@ -1,0 +1,585 @@
+---
+title: EVM Compatibility
+description: What's compatible, what's different, and how to migrate from Ethereum
+---
+
+Tempo is **fully compatible with the Ethereum Virtual Machine (EVM)**, targeting the **Osaka hardfork** specification. Deploy and interact with smart contracts using the same tools, languages, and frameworks as Ethereum.
+
+<Note>
+All standard Ethereum JSON-RPC methods work out of the box. Existing contracts can be deployed to Tempo without modification in most cases.
+</Note>
+
+## What Works Identically
+
+<CardGroup cols={2}>
+  <Card title="Smart Contracts" icon="file-code">
+    **Solidity, Vyper, Yul** compile to identical bytecode. Deploy contracts without modification.
+  </Card>
+  <Card title="Development Tools" icon="hammer">
+    **Foundry, Hardhat, Remix** work out of the box. No special configuration needed.
+  </Card>
+  <Card title="Wallets" icon="wallet">
+    **MetaMask, Rainbow, WalletConnect** connect seamlessly. Add Tempo as a custom network.
+  </Card>
+  <Card title="JSON-RPC API" icon="code">
+    All **eth_*** methods** work identically: `eth_sendTransaction`, `eth_call`, `eth_estimateGas`, etc.
+  </Card>
+</CardGroup>
+
+### Standard EVM Operations
+
+✅ All EVM opcodes supported (Osaka hardfork set)  
+✅ Contract creation via CREATE and CREATE2  
+✅ Standard transaction types (0x00, 0x01, 0x02, 0x03)  
+✅ EIP-1559 fee market (dynamic fees)  
+✅ EIP-2930 access lists  
+✅ EIP-7702 authorization lists (with Tempo signatures)  
+✅ Events and logs with Bloom filters  
+✅ Standard block structure and headers  
+✅ `eth_call` for read-only contract calls  
+✅ `eth_estimateGas` for gas estimation  
+✅ `eth_getLogs` for event queries  
+
+## Tempo-Specific Additions
+
+Tempo extends the EVM with payment-focused features:
+
+### 1. Tempo Transactions (Type 0x76)
+
+Native transaction format with batching, fee sponsorship, and passkeys:
+
+```typescript
+// Standard Ethereum transaction
+const ethTx = await wallet.sendTransaction({
+  to: recipient,
+  value: parseEther('1'),
+});
+
+// Tempo transaction with batching
+const tempoTx = await wallet.sendTransaction({
+  calls: [
+    { to: recipient1, value: parseEther('1'), input: '0x' },
+    { to: recipient2, value: parseEther('0.5'), input: '0x' },
+  ],
+});
+```
+
+<Card title="Tempo Transactions" icon="layer-group" href="/concepts/tempo-transactions">
+  Learn about batching, fee sponsorship, and scheduled payments
+</Card>
+
+### 2. Enshrined Precompiles
+
+Tempo implements critical functionality as protocol-level precompiles:
+
+<AccordionGroup>
+  <Accordion title="TIP-20 Tokens (0x20c0...)">
+    ERC-20 compatible tokens with built-in memos, payment lanes, and compliance.
+    
+    **Gas savings**: ~50k gas per transfer vs 65k+ for standard ERC-20.
+    
+    ```solidity
+    ITIP20 token = ITIP20(0x20c0000000000000000000000000000000000001);
+    token.transferWithMemo(recipient, 1000e6, "INV-12345");
+    ```
+  </Accordion>
+  
+  <Accordion title="TIP-403 Policy Registry">
+    Shared compliance policies across multiple tokens.
+    
+    ```solidity
+    ITIP403Registry(REGISTRY_ADDRESS).createPolicy(hooksAddress);
+    token.setPolicyId(policyId);
+    ```
+  </Accordion>
+  
+  <Accordion title="Fee AMM">
+    Automatic stablecoin conversion for fee payments.
+    
+    Users pay in USDC, validators receive DAI — conversion handled automatically.
+  </Accordion>
+  
+  <Accordion title="Account Keychain">
+    Protocol-level key management with passkeys, spending limits, and expiry.
+    
+    ```solidity
+    IAccountKeychain(KEYCHAIN_ADDRESS).addKey(
+        keyHash, SignatureType.P256, validUntil, spendingLimits
+    );
+    ```
+  </Accordion>
+  
+  <Accordion title="Nonce Manager">
+    2D nonce tracking for parallel transaction processing.
+    
+    Query nonces per nonce key for out-of-order transaction submission.
+  </Accordion>
+  
+  <Accordion title="Stablecoin DEX">
+    On-chain order book for stablecoin swaps with limit orders.
+    
+    ```solidity
+    IStablecoinDEX(DEX_ADDRESS).place(token, amount, isBid, tick);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### 3. Fee Market Differences
+
+**Fees denominated in USD (stablecoins)**:
+
+```typescript
+// Ethereum (fees in ETH)
+const ethTx = {
+  maxFeePerGas: parseGwei('50'),        // 50 gwei in ETH
+  maxPriorityFeePerGas: parseGwei('2'), // 2 gwei tip
+};
+
+// Tempo (fees in stablecoins, specified in attodollars)
+const tempoTx = {
+  maxFeePerGas: 20_000_000_000n,           // 20 billion attodollars/gas
+  maxPriorityFeePerGas: 1_000_000_000n,    // 1 billion attodollars/gas
+  feeToken: USDC_ADDRESS,                  // Optional: pay in specific token
+};
+```
+
+**Units**:
+- **Attodollars** (10^-18 USD): Gas price unit
+- **Microdollars** (10^-6 USD): Token unit (TIP-20 uses 6 decimals)
+- Conversion: `attodollars / 10^12 = microdollars`
+
+<Info>
+**Fee conversion**: If you specify `feeToken`, the Fee AMM automatically converts your payment to the validator's preferred stablecoin.
+</Info>
+
+### 4. Multi-Signature Support
+
+Tempo supports three signature types natively:
+
+<CardGroup cols={3}>
+  <Card title="secp256k1" icon="ethereum">
+    Standard Ethereum signatures (65 bytes)
+  </Card>
+  <Card title="P256" icon="mobile">
+    Hardware-backed signing (129 bytes)
+  </Card>
+  <Card title="WebAuthn" icon="fingerprint">
+    Passkey signatures (variable size)
+  </Card>
+</CardGroup>
+
+Contracts can verify any signature type:
+
+```solidity
+function verifyTempoSignature(
+    bytes32 hash,
+    bytes memory signature,
+    address signer
+) public view returns (bool) {
+    // Automatically handles secp256k1, P256, or WebAuthn
+    // based on signature format
+}
+```
+
+## Key Differences from Ethereum
+
+### State Creation Costs (TIP-1000)
+
+Tempo implements **elevated storage costs** to prevent state bloat:
+
+| Operation | Ethereum | Tempo | Change |
+|-----------|----------|-------|--------|
+| New state element (SSTORE) | 20,000 gas | 250,000 gas | +12.5x |
+| Account creation | 0 gas | 250,000 gas | New cost |
+| Contract deployment (per byte) | 200 gas | 1,000 gas | +5x |
+| Contract deployment (base) | 32,000 gas | 500,000 gas | +15.6x |
+
+**Rationale**: At 20,000 TPS, Tempo could create 120TB of state per year at Ethereum prices. Higher costs deter state bloat attacks.
+
+<Warning>
+**Migration Impact**: Contracts that create significant state (many storage slots or large mappings) will have higher deployment and runtime costs.
+</Warning>
+
+### Gas Limits
+
+| Parameter | Ethereum | Tempo | Purpose |
+|-----------|----------|-------|----------|
+| Block gas limit | 30M | 500M | Total capacity |
+| Transaction gas cap | 30M | 30M | Max per tx |
+| Payment lane | N/A | 450M | TIP-20 transfers |
+| General lane | N/A | 30M | Smart contracts |
+
+**Why higher block gas?**
+- 500ms block times vs 12s (24x faster)
+- Dedicated payment lane for high throughput
+- State rent economics prevent bloat despite larger blocks
+
+### Block Time
+
+- **Ethereum**: ~12 seconds
+- **Tempo**: ~500 milliseconds (0.5s)
+
+**Implications**:
+- Faster transaction confirmation
+- More frequent `block.timestamp` updates (useful for time-sensitive logic)
+- Higher block number growth rate
+
+```solidity
+// Ethereum: ~7,200 blocks per day
+// Tempo: ~172,800 blocks per day
+
+function timeBasedLogic() public {
+    // Use block.timestamp for time checks, not block.number
+    require(block.timestamp >= unlockTime, "Too early");
+}
+```
+
+<Info>
+**Best Practice**: Use `block.timestamp` for time-based logic, not `block.number`. Block numbers grow 24x faster on Tempo.
+</Info>
+
+### Finality
+
+- **Ethereum**: ~15 minutes for practical finality (2 epochs)
+- **Tempo**: &lt;1 second (Simplex consensus)
+
+**Impact**: Applications can treat confirmed transactions as final almost immediately.
+
+```typescript
+// Ethereum: Wait for confirmations
+const receipt = await tx.wait(5); // Wait 5 blocks (~1 min)
+
+// Tempo: Single confirmation is final
+const receipt = await tx.wait(1); // &lt;1 second, irreversible
+```
+
+### No Beacon Chain / Merge Concepts
+
+Tempo uses **Simplex consensus** from genesis — there's no separate consensus layer or beacon chain:
+
+- ❌ No beacon chain API
+- ❌ No merge transition
+- ❌ No execution/consensus layer split
+- ✅ Single unified node software
+
+### Uncle/Ommer Blocks
+
+Tempo does not have uncle blocks:
+
+- `block.ommersHash` always returns empty hash
+- No uncle rewards
+- Simpler fork choice rule (Simplex BFT)
+
+## Contract Migration Guide
+
+### Step 1: Review Storage Usage
+
+Identify contracts with heavy storage usage:
+
+```solidity
+// High storage cost on Tempo
+contract ManyMappings {
+    mapping(address => uint256) public balances;        // 250k gas per new entry
+    mapping(address => bool) public whitelist;          // 250k gas per new entry
+    mapping(address => UserData) public userData;       // 250k per struct (per slot)
+    
+    // Cheaper: Use TIP-20 for balances (enshrined, optimized)
+    ITIP20 public token; // Only 50k gas per transfer
+}
+```
+
+**Optimization**: Use TIP-20 tokens instead of custom balance mappings where possible.
+
+### Step 2: Test Gas Costs
+
+Deploy to Tempo testnet and compare gas usage:
+
+```bash
+# Foundry gas reports
+forge test --gas-report --rpc-url https://rpc.moderato.tempo.xyz
+```
+
+### Step 3: Update Time-Based Logic
+
+Replace `block.number` with `block.timestamp` for time checks:
+
+```solidity
+// ❌ Avoid: Block numbers grow 24x faster on Tempo
+require(block.number > unlockBlock, "Locked");
+
+// ✅ Use timestamps instead
+require(block.timestamp > unlockTime, "Locked");
+```
+
+### Step 4: Handle Fee Differences
+
+Update gas estimates for user-facing apps:
+
+```typescript
+// Ethereum gas estimation
+const ethGas = await contract.estimateGas.myFunction();
+const ethCost = ethGas * gasPrice; // in ETH
+
+// Tempo gas estimation
+const tempoGas = await contract.estimateGas.myFunction();
+const tempoCost = tempoGas * baseFee; // in attodollars
+const tempoCostUSD = tempoCost / 1e18; // convert to dollars
+```
+
+### Step 5: Test Signature Handling
+
+If your contract verifies signatures, test with P256/WebAuthn:
+
+```solidity
+// Supports all Tempo signature types
+import "@tempo/contracts/SignatureVerifier.sol";
+
+contract MyContract is SignatureVerifier {
+    function verifyUser(bytes32 hash, bytes memory sig, address user) public view {
+        require(recoverSigner(hash, sig) == user, "Invalid signature");
+    }
+}
+```
+
+## Tool Compatibility
+
+### Foundry
+
+✅ **Full support** — no configuration changes needed:
+
+```bash
+# Deploy to Tempo
+forge create MyContract \
+  --rpc-url https://rpc.moderato.tempo.xyz \
+  --private-key $PRIVATE_KEY
+
+# Run tests against Tempo fork
+forge test --fork-url https://rpc.moderato.tempo.xyz
+```
+
+### Hardhat
+
+✅ **Full support** — add Tempo network to config:
+
+```javascript
+// hardhat.config.js
+module.exports = {
+  networks: {
+    tempo: {
+      url: 'https://rpc.moderato.tempo.xyz',
+      chainId: 42431,
+      accounts: [process.env.PRIVATE_KEY],
+    },
+  },
+};
+```
+
+### Ethers.js / Viem
+
+✅ **Full support** — use standard provider:
+
+```typescript
+import { createPublicClient, http } from 'viem';
+
+const client = createPublicClient({
+  chain: {
+    id: 42431,
+    name: 'Tempo Testnet',
+    network: 'tempo',
+    nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 6 },
+    rpcUrls: {
+      default: { http: ['https://rpc.moderato.tempo.xyz'] },
+    },
+  },
+  transport: http(),
+});
+```
+
+### Web3.js
+
+✅ **Full support**:
+
+```javascript
+import Web3 from 'web3';
+
+const web3 = new Web3('https://rpc.moderato.tempo.xyz');
+```
+
+### Remix IDE
+
+✅ **Full support** — use "Injected Provider" with MetaMask connected to Tempo.
+
+## RPC Differences
+
+### Standard Methods (Identical)
+
+All standard `eth_*` methods work identically:
+
+- `eth_blockNumber`, `eth_getBalance`, `eth_call`
+- `eth_sendTransaction`, `eth_sendRawTransaction`
+- `eth_getTransactionReceipt`, `eth_getLogs`
+- `eth_estimateGas`, `eth_gasPrice`, `eth_maxPriorityFeePerGas`
+- `eth_getCode`, `eth_getStorageAt`
+
+### Tempo Extensions
+
+**Additional RPC methods**:
+
+```typescript
+// Fund address on testnet (faucet)
+await provider.send('tempo_fundAddress', [address]);
+
+// Get nonce for specific nonce key
+const nonce = await provider.send('tempo_getNonce', [
+  address,
+  nonceKey, // U256 nonce key
+]);
+
+// Estimate gas for Tempo transaction
+const gas = await provider.send('eth_estimateGas', [{
+  calls: [/* batch calls */],
+  nonceKey: '0x1',
+}]);
+```
+
+### Transaction Receipts
+
+Tempo receipts include additional fields:
+
+```typescript
+interface TempoTransactionReceipt extends TransactionReceipt {
+  feeToken?: string;          // Token used for fee payment
+  feePayer?: string;          // Address that paid fees (if sponsored)
+  batchIndex?: number;        // Index of call in batch
+  subBlockIndex?: number;     // Sub-block index (if validator tx)
+}
+```
+
+## Osaka Hardfork Features
+
+Tempo targets the **Osaka hardfork** EVM specification:
+
+<CardGroup cols={2}>
+  <Card title="EOF (EVM Object Format)" icon="file-code">
+    Improved bytecode format with code/data separation and versioning.
+  </Card>
+  <Card title="Verkle Trees" icon="network-wired">
+    Efficient state proofs for light clients (future optimization).
+  </Card>
+  <Card title="Account Abstraction" icon="users">
+    EIP-7702 authorization lists natively supported (Tempo signatures).
+  </Card>
+  <Card title="Blob Transactions" icon="database">
+    EIP-4844 style data availability (adapted for Tempo's model).
+  </Card>
+</CardGroup>
+
+<Info>
+Osaka features may be implemented progressively. Check the [Tempo roadmap](https://tempo.xyz) for current status.
+</Info>
+
+## Common Pitfalls
+
+<AccordionGroup>
+  <Accordion title="Using block.number for Time">
+    **Problem**: Blocks are 24x more frequent on Tempo (500ms vs 12s).
+    
+    **Solution**: Use `block.timestamp` for all time-based logic.
+    
+    ```solidity
+    // ❌ Bad
+    require(block.number > unlockBlock);
+    
+    // ✅ Good
+    require(block.timestamp > unlockTime);
+    ```
+  </Accordion>
+  
+  <Accordion title="Hardcoded Gas Estimates">
+    **Problem**: State creation costs differ from Ethereum.
+    
+    **Solution**: Always use `eth_estimateGas`, don't hardcode gas limits.
+    
+    ```typescript
+    // ❌ Bad
+    const tx = await contract.myFunction({ gasLimit: 100_000 });
+    
+    // ✅ Good
+    const estimated = await contract.estimateGas.myFunction();
+    const tx = await contract.myFunction({ gasLimit: estimated });
+    ```
+  </Accordion>
+  
+  <Accordion title="Assuming Ethereum Fee Market">
+    **Problem**: Fees are denominated in stablecoins (attodollars), not ETH (gwei).
+    
+    **Solution**: Display fees in USD, not ETH.
+    
+    ```typescript
+    // Convert attodollars to USD
+    const feeUSD = (gasUsed * baseFee) / 1e18;
+    console.log(`Transaction cost: $${feeUSD.toFixed(6)}`);
+    ```
+  </Accordion>
+  
+  <Accordion title="Not Leveraging TIP-20">
+    **Problem**: Using custom ERC-20 contracts when TIP-20 would be cheaper.
+    
+    **Solution**: Use TIP-20 for tokens that need high throughput and low fees.
+    
+    See [TIP-20 Token Standard](/concepts/tip20-tokens).
+  </Accordion>
+</AccordionGroup>
+
+## Testing Strategy
+
+1. **Local Development**: Use Foundry's anvil or Hardhat's node (Ethereum-compatible)
+2. **Integration Testing**: Deploy to Tempo testnet and run full test suite
+3. **Gas Profiling**: Compare gas costs between Ethereum and Tempo
+4. **Load Testing**: Test with Tempo's higher throughput (500ms blocks)
+5. **Production**: Deploy to Tempo mainnet
+
+## Migration Checklist
+
+<Steps>
+  <Step title="Audit Storage Usage">
+    Identify contracts with heavy SSTORE operations. Calculate new deployment costs.
+  </Step>
+  
+  <Step title="Update Time Logic">
+    Replace all `block.number` time checks with `block.timestamp`.
+  </Step>
+  
+  <Step title="Test on Testnet">
+    Deploy to Tempo testnet (Moderato) and run comprehensive test suite.
+  </Step>
+  
+  <Step title="Profile Gas Costs">
+    Compare gas costs with Ethereum. Optimize high-cost operations.
+  </Step>
+  
+  <Step title="Update Frontend">
+    Adjust gas estimation and fee display for stablecoin denomination.
+  </Step>
+  
+  <Step title="Deploy to Mainnet">
+    After thorough testing, deploy to Tempo mainnet.
+  </Step>
+</Steps>
+
+## Further Reading
+
+<CardGroup cols={2}>
+  <Card title="Quickstart: EVM Compatibility" icon="bolt" href="/concepts/evm-compatibility">
+    Practical guide to deploying Ethereum contracts on Tempo
+  </Card>
+  <Card title="TIP-1000: State Creation Costs" icon="database" href="/protocol/tips/tip-1000">
+    Technical specification of elevated storage pricing
+  </Card>
+  <Card title="Tempo Transactions" icon="layer-group" href="/concepts/tempo-transactions">
+    Leverage native batching and fee sponsorship
+  </Card>
+  <Card title="Smart Contract Development" icon="code" href="/guides/deploying-contracts">
+    Complete guide to building on Tempo
+  </Card>
+</CardGroup>

@@ -1,0 +1,176 @@
+---
+title: Precompiles Overview
+description: Native precompiled contracts in Tempo for optimized protocol operations
+---
+
+Precompiles are native smart contracts implemented in Rust and compiled directly into the Tempo node. They execute at the protocol level with significantly lower gas costs than equivalent Solidity implementations, while maintaining the same interface compatibility.
+
+## What are Precompiles?
+
+Precompiles are special contracts deployed at fixed addresses that bypass the EVM interpreter. Instead of executing bytecode, calls to precompile addresses are routed directly to optimized native code. This provides:
+
+- **Gas Efficiency**: 10-100x cheaper than equivalent Solidity contracts
+- **Performance**: Direct memory access and native operations
+- **Security**: Core protocol logic protected from bytecode vulnerabilities
+- **Upgradability**: Can be updated via hardforks without changing addresses
+
+## Security Model
+
+All Tempo precompiles enforce:
+
+- **No DELEGATECALL**: Precompiles can only be called directly, never via `DELEGATECALL`
+- **Static Context Awareness**: Mutating functions revert when called in static context
+- **Gas Metering**: All operations are properly metered for resource consumption
+- **Storage Isolation**: Each precompile has isolated storage at its address
+
+## Available Precompiles
+
+### Core Protocol
+
+<CardGroup cols={2}>
+  <Card title="Nonce Manager" icon="hashtag" href="/protocol/precompiles/nonce">
+    2D nonce management for parallel transaction execution
+  </Card>
+  
+  <Card title="Account Keychain" icon="key" href="/protocol/precompiles/account-keychain">
+    Multi-key authorization with spending limits for smart accounts
+  </Card>
+</CardGroup>
+
+### Token Infrastructure
+
+<CardGroup cols={2}>
+  <Card title="TIP-20 Factory" icon="industry" href="/protocol/precompiles/tip20-factory">
+    Deploy TIP-20 tokens at deterministic addresses
+  </Card>
+  
+  <Card title="TIP-403 Registry" icon="shield-check" href="/protocol/precompiles/tip403-registry">
+    Compliance policy registry for transfer restrictions
+  </Card>
+</CardGroup>
+
+### Consensus
+
+<CardGroup cols={1}>
+  <Card title="Validator Config" icon="server" href="/protocol/precompiles/validator-config">
+    Manage validator set and DKG ceremony scheduling
+  </Card>
+</CardGroup>
+
+## Precompile Addresses
+
+All precompiles are deployed at fixed, human-readable addresses:
+
+| Precompile | Address | Purpose |
+|------------|---------|----------|
+| Nonce Manager | `0x4E4F4E4345000000000000000000000000000000` | 2D nonce management |
+| Account Keychain | `0xAAAAAAAA00000000000000000000000000000000` | Multi-key authorization |
+| TIP-20 Factory | `0x20FC000000000000000000000000000000000000` | Token deployment |
+| TIP-403 Registry | `0x403C000000000000000000000000000000000000` | Compliance policies |
+| Validator Config | `0xCCCCCCCC00000000000000000000000000000000` | Consensus validators |
+
+<Note>
+  Addresses are chosen to be memorable:
+  - `0x4E4F4E4345...` = "NONCE" in ASCII hex
+  - `0xAAAAAAAA...` = Account (repeating A)
+  - `0x20FC...` = 20 (TIP-20) + Factory
+  - `0x403C...` = 403 (TIP-403) + Compliance
+  - `0xCCCCCCCC...` = Consensus (repeating C)
+</Note>
+
+## Usage Patterns
+
+### Direct Calls
+
+Precompiles are called like regular contracts:
+
+```solidity
+interface INonce {
+    function getNonce(address account, uint256 nonceKey) 
+        external view returns (uint64);
+}
+
+contract MyContract {
+    INonce constant NONCE = INonce(0x4E4F4E4345000000000000000000000000000000);
+    
+    function checkNonce(address user) public view returns (uint64) {
+        return NONCE.getNonce(user, 1);
+    }
+}
+```
+
+### From Web3 Libraries
+
+```typescript
+import { createPublicClient, http } from 'viem'
+import { NonceManagerABI } from '@tempo/abis'
+
+const client = createPublicClient({
+  chain: tempo,
+  transport: http()
+})
+
+const nonce = await client.readContract({
+  address: '0x4E4F4E4345000000000000000000000000000000',
+  abi: NonceManagerABI,
+  functionName: 'getNonce',
+  args: [account, nonceKey]
+})
+```
+
+## Hardfork Activation
+
+Precompile behavior can change across hardforks:
+
+- **Genesis**: Base precompiles (Nonce, TIP-20, TIP-403, Validator Config)
+- **T1**: Account Keychain, improved error handling
+- **T1C**: P256 signature support via Osaka precompiles
+- **T2**: Compound policies (TIP-1015), Validator Config V2
+
+The active hardfork is determined by block number. Precompiles automatically adapt their behavior based on `CfgEnv.spec`.
+
+## Gas Costs
+
+Precompile operations have fixed base costs plus per-operation charges:
+
+- **Base Call**: ~2,100 gas (similar to contract call)
+- **Storage Read**: 100-2,100 gas (cold/warm)
+- **Storage Write**: 2,900-20,000 gas (new/existing)
+- **Calldata**: 6 gas per 32-byte word
+
+Actual costs depend on operation complexity and storage access patterns. See individual precompile pages for detailed gas breakdowns.
+
+## Error Handling
+
+Precompiles return ABI-encoded errors like Solidity contracts:
+
+```solidity
+error UnknownFunctionSelector(bytes4 selector);
+error ProtocolNonceNotSupported();
+error KeyExpired();
+```
+
+Errors cause transaction reversion with encoded error data that can be decoded by client libraries.
+
+## Implementation Details
+
+Precompiles are implemented in Rust in `crates/precompiles/src/`. Each precompile:
+
+1. Defines storage layout using the `#[contract]` macro
+2. Implements the `Precompile` trait with a `call()` dispatcher
+3. Uses `tempo_contracts` for Solidity interface generation
+4. Includes comprehensive test coverage
+
+The precompile framework handles:
+- ABI encoding/decoding
+- Gas metering and refunds
+- Storage slot computation
+- Event emission
+- Error handling
+
+## See Also
+
+- [TIP-20 Token Standard](/protocol/tip20/overview)
+- [TIP-403 Compliance](/protocol/precompiles/tip403-registry)
+- [Account Abstraction](/concepts/tempo-transactions)
+- [Consensus Mechanism](/concepts/consensus)

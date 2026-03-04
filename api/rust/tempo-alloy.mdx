@@ -1,0 +1,324 @@
+---
+title: tempo-alloy
+description: Alloy integration for Tempo - network types, providers, and transaction building
+---
+
+The `tempo-alloy` crate provides Alloy integration for Tempo, including network types, provider implementations, transaction request builders, and RPC type conversions.
+
+## Installation
+
+```toml
+[dependencies]
+tempo-alloy = "0.1.0"
+```
+
+## Network Types
+
+### TempoNetwork
+
+The Tempo-specific implementation of Alloy's `Network` trait.
+
+```rust
+use tempo_alloy::TempoNetwork;
+use alloy_network::Network;
+
+// TempoNetwork defines:
+// - TxType: TempoTxType (Legacy, EIP-2930, EIP-1559, EIP-7702, AA)
+// - TxEnvelope: TempoTxEnvelope
+// - UnsignedTx: TempoTypedTransaction
+// - ReceiptEnvelope: ReceiptWithBloom<TempoReceipt>
+// - Header: TempoHeader
+// - TransactionRequest: TempoTransactionRequest
+// - TransactionResponse: Transaction<TempoTxEnvelope>
+// - ReceiptResponse: TempoTransactionReceipt
+```
+
+**Source:** `crates/alloy/src/network.rs:26-41`
+
+### Recommended Fillers
+
+```rust
+use tempo_alloy::TempoFillers;
+use alloy_provider::fillers::NonceFiller;
+
+// Type alias: JoinFill<NonceFiller, JoinFill<GasFiller, ChainIdFiller>>
+type Fillers = TempoFillers<NonceFiller>;
+```
+
+**Source:** `crates/alloy/src/network.rs:20-23`
+
+## Transaction Requests
+
+### TempoTransactionRequest
+
+Extends Ethereum's `TransactionRequest` with Tempo-specific fields for Account Abstraction.
+
+```rust
+use tempo_alloy::rpc::TempoTransactionRequest;
+use alloy_primitives::{Address, U256, Bytes};
+
+// Build a standard transaction
+let tx = TempoTransactionRequest::default()
+    .with_to(Address::ZERO)
+    .with_value(U256::from(1000))
+    .with_gas_limit(21000);
+
+// Build an AA transaction with custom fee token
+let aa_tx = TempoTransactionRequest::default()
+    .with_fee_token(token_address)
+    .with_nonce_key(U256::from(1))
+    .with_calls(vec![call1, call2]);
+```
+
+**AA-Specific Fields:**
+
+<ParamField path="fee_token" type="Address">
+  Token address to pay gas fees in (instead of native currency)
+</ParamField>
+
+<ParamField path="nonce_key" type="U256">
+  Custom nonce key for 2D nonce system (enables parallel transactions)
+</ParamField>
+
+<ParamField path="calls" type="Vec<Call>">
+  Array of calls for multi-call batching
+</ParamField>
+
+<ParamField path="tempo_authorization_list" type="Vec<TempoSignedAuthorization>">
+  EIP-7702 style authorizations with Tempo signature types
+</ParamField>
+
+<ParamField path="key_authorization" type="SignedKeyAuthorization">
+  Authorization to use a delegated signing key
+</ParamField>
+
+<ParamField path="key_id" type="Address">
+  ID of the signing key to use
+</ParamField>
+
+<ParamField path="valid_before" type="u64">
+  Unix timestamp after which transaction is invalid
+</ParamField>
+
+<ParamField path="valid_after" type="u64">
+  Unix timestamp before which transaction is invalid
+</ParamField>
+
+**Source:** `crates/alloy/src/rpc/request.rs`
+
+### Transaction Builder Extensions
+
+```rust
+use tempo_alloy::rpc::TempoCallBuilderExt;
+
+// Extension trait for building AA transactions
+trait TempoCallBuilderExt {
+    fn with_fee_token(self, token: Address) -> Self;
+    fn with_nonce_key(self, key: U256) -> Self;
+    fn with_calls(self, calls: Vec<Call>) -> Self;
+    fn with_valid_before(self, timestamp: u64) -> Self;
+    fn with_valid_after(self, timestamp: u64) -> Self;
+}
+```
+
+## RPC Types
+
+### TempoTransactionReceipt
+
+Transaction receipt with Tempo-specific fields.
+
+```rust
+use tempo_alloy::rpc::TempoTransactionReceipt;
+use alloy_rpc_types_eth::TransactionReceipt;
+
+pub struct TempoTransactionReceipt {
+    /// Standard Ethereum receipt fields
+    pub inner: TransactionReceipt,
+    
+    /// Token used to pay transaction fees (null for free transactions)
+    pub fee_token: Option<Address>,
+    
+    /// Address that paid for the transaction fees
+    pub fee_payer: Address,
+}
+```
+
+**Source:** `crates/alloy/src/rpc/receipt.rs`
+
+### TempoHeaderResponse
+
+Block header with Tempo-specific fields.
+
+```rust
+use tempo_alloy::rpc::TempoHeaderResponse;
+
+// Includes standard Ethereum header fields plus:
+// - generalGasLimit: u64
+// - sharedGasLimit: u64  
+// - timestampMillisPart: u64
+```
+
+**Source:** `crates/alloy/src/rpc/header.rs`
+
+## Provider Integration
+
+### Wallet Support
+
+```rust
+use tempo_alloy::TempoNetwork;
+use alloy_network::{EthereumWallet, NetworkWallet};
+use alloy_signer_local::PrivateKeySigner;
+
+// Create wallet
+let signer = PrivateKeySigner::random();
+let wallet = EthereumWallet::from(signer);
+
+// Sign transaction
+let tx = TempoTransactionRequest::default()
+    .with_to(Address::ZERO)
+    .with_value(U256::from(1000));
+    
+let envelope = wallet.sign_transaction_from(
+    sender_address,
+    tx.build_unsigned()?
+).await?;
+```
+
+**Source:** `crates/alloy/src/network.rs:294-319`
+
+## Pagination
+
+Utility types for cursor-based pagination in RPC queries.
+
+```rust
+use tempo_alloy::rpc::pagination::PaginationParams;
+
+pub struct PaginationParams<F> {
+    /// Maximum number of results to return
+    pub limit: Option<u32>,
+    
+    /// Opaque cursor for fetching next page
+    pub cursor: Option<String>,
+    
+    /// Query-specific filters
+    pub filter: F,
+}
+```
+
+**Source:** `crates/alloy/src/rpc/pagination.rs`
+
+## Transaction Fillers
+
+Custom transaction fillers for Tempo-specific fields.
+
+```rust
+use tempo_alloy::fillers;
+
+// Located in crates/alloy/src/fillers/
+// Implements:
+// - Fee token filler
+// - Nonce key filler
+// - Validity window filler
+```
+
+**Source:** `crates/alloy/src/fillers/`
+
+## Type Conversions
+
+### Reth Compatibility
+
+With the `tempo-compat` feature, convert between Alloy and Reth types.
+
+```rust
+use tempo_alloy::rpc::compat;
+
+// Convert between Tempo RPC types and Reth internal types
+// Requires: tempo-compat feature
+```
+
+**Source:** `crates/alloy/src/rpc/compat.rs`
+
+## Example: Building and Sending AA Transaction
+
+```rust
+use tempo_alloy::{
+    TempoNetwork,
+    rpc::{TempoTransactionRequest, FeeToken},
+};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_network::EthereumWallet;
+use alloy_primitives::{Address, U256};
+
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
+    // Setup provider
+    let provider = ProviderBuilder::new()
+        .network::<TempoNetwork>()
+        .with_recommended_fillers()
+        .wallet(wallet)
+        .on_http("https://rpc.tempo.xyz".parse()?);
+    
+    // Build AA transaction with custom fee token
+    let tx = TempoTransactionRequest::default()
+        .with_from(sender)
+        .with_to(recipient)
+        .with_value(U256::from(1000))
+        .with_fee_token(usdc_address) // Pay fees in USDC
+        .with_nonce_key(U256::from(1)); // Use custom nonce key
+    
+    // Send transaction
+    let pending = provider.send_transaction(tx).await?;
+    let receipt = pending.get_receipt().await?;
+    
+    println!("Transaction hash: {:?}", receipt.transaction_hash);
+    println!("Fee token: {:?}", receipt.fee_token);
+    println!("Fee payer: {:?}", receipt.fee_payer);
+    
+    Ok(())
+}
+```
+
+## Example: Multi-Call Batching
+
+```rust
+use tempo_alloy::rpc::TempoTransactionRequest;
+use alloy_primitives::{Address, Bytes};
+
+// Build multi-call AA transaction
+let tx = TempoTransactionRequest::default()
+    .with_calls(vec![
+        // Transfer tokens
+        Call {
+            to: token_address,
+            value: None,
+            data: transfer_calldata,
+        },
+        // Approve spender
+        Call {
+            to: token_address,
+            value: None,
+            data: approve_calldata,
+        },
+        // Swap on DEX
+        Call {
+            to: dex_address,
+            value: None,
+            data: swap_calldata,
+        },
+    ])
+    .with_fee_token(usdc_address);
+
+// All three operations execute atomically
+let receipt = provider.send_transaction(tx).await?.get_receipt().await?;
+```
+
+## Features
+
+- `tempo-compat` - Enable conversions between Alloy and Reth types
+- `asm-keccak` - Use optimized assembly Keccak implementation
+
+## See Also
+
+- [tempo-primitives](/api/rust/tempo-primitives) - Core primitive types
+- [tempo-contracts](/api/rust/tempo-primitives) - TIP-20 and system contracts
+- [Alloy Documentation](https://alloy.rs) - Alloy framework documentation

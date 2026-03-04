@@ -1,0 +1,557 @@
+---
+title: Running a Node
+description: Start and operate a Tempo node on testnet or mainnet
+---
+
+Once you've [installed](/node/installation) and [configured](/node/configuration) your Tempo node, you're ready to start it and connect to the network.
+
+## Starting Your Node
+
+### Quick Start (Testnet)
+
+The fastest way to get a node running on testnet:
+
+```bash
+tempo node --chain moderato --follow
+```
+
+This runs a non-validating follower node that syncs from the official Moderato testnet RPC.
+
+### Full Node (Testnet)
+
+Run a full testnet node with RPC access:
+
+```bash
+tempo node \
+  --chain moderato \
+  --datadir ~/.tempo/moderato \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546
+```
+
+Your node will:
+1. Connect to Moderato testnet peers
+2. Download and verify the blockchain
+3. Expose RPC endpoints at `localhost:8545` (HTTP) and `localhost:8546` (WebSocket)
+
+### Validator Node (Mainnet)
+
+Run a validator node on mainnet:
+
+```bash
+tempo node \
+  --chain mainnet \
+  --datadir /var/lib/tempo \
+  --consensus.signing-key /etc/tempo/signing-key.hex \
+  --consensus.signing-share /etc/tempo/signing-share.hex \
+  --consensus.fee-recipient 0xYourFeeRecipientAddress \
+  --consensus.listen-address 0.0.0.0:8000 \
+  --http --http.addr 127.0.0.1 --http.port 8545
+```
+
+**Important for validators:**
+- Ensure ports are properly configured and firewall rules allow consensus traffic
+- Set a secure fee recipient address
+- Keep signing keys secure and backed up
+- Monitor your validator's performance
+
+## Syncing
+
+### Initial Sync
+
+When first starting, your node needs to sync with the network.
+
+#### Method 1: Snapshot Sync (Recommended)
+
+Fast sync using official snapshots:
+
+```bash
+# Download snapshot first
+tempo download --chain moderato
+
+# Then start node
+tempo node --chain moderato --datadir ~/.tempo/moderato
+```
+
+Snapshot locations:
+- **Mainnet**: `https://snapshots.tempoxyz.dev/4217`
+- **Moderato (Testnet)**: `https://snapshots.tempoxyz.dev/42431`
+- **Andantino (Testnet)**: `https://snapshots.tempoxyz.dev/42429`
+
+#### Method 2: Full Sync
+
+Sync from genesis (slower but trustless):
+
+```bash
+tempo node --chain moderato --datadir ~/.tempo/moderato
+```
+
+### Monitoring Sync Progress
+
+Check sync status via RPC:
+
+```bash
+cast rpc eth_syncing --rpc-url http://localhost:8545
+```
+
+Output when syncing:
+```json
+{
+  "startingBlock": "0x0",
+  "currentBlock": "0x3e8",
+  "highestBlock": "0x4e20"
+}
+```
+
+Output when synced:
+```
+false
+```
+
+### Sync Times
+
+| Method | Time (Moderato) | Notes |
+|--------|-----------------|-------|
+| Snapshot | ~30 minutes | Recommended for quick start |
+| Full sync | Hours to days | Complete verification from genesis |
+| Follow mode | ~5 minutes | Uses existing RPC, minimal storage |
+
+## Operating Modes
+
+### Follow Mode
+
+Run a lightweight node that follows a trusted RPC:
+
+```bash
+# Auto-detect official RPC
+tempo node --chain moderato --follow
+
+# Follow specific RPC
+tempo node --chain moderato --follow https://rpc.moderato.tempo.xyz
+```
+
+**Advantages:**
+- Fast startup (no historical sync)
+- Lower storage requirements
+- Full RPC functionality
+
+**Use cases:**
+- Development and testing
+- RPC gateway
+- Fast node deployment
+
+### Full Node Mode
+
+Run a full node that validates all blocks:
+
+```bash
+tempo node \
+  --chain moderato \
+  --datadir ~/.tempo/moderato
+```
+
+**Advantages:**
+- Complete chain validation
+- No trust in external RPC
+- Can serve as RPC endpoint for others
+
+**Use cases:**
+- Production RPC service
+- Independent verification
+- Archive node
+
+### Validator Mode
+
+Participate in consensus and earn rewards:
+
+```bash
+tempo node \
+  --chain mainnet \
+  --consensus.signing-key /path/to/key \
+  --consensus.signing-share /path/to/share \
+  --consensus.fee-recipient 0xYourAddress
+```
+
+**Requirements:**
+- Validator credentials (signing key and share)
+- Stable infrastructure with high uptime
+- Open consensus ports
+- Fee recipient address
+
+**Use cases:**
+- Network validation
+- Earning block rewards
+- Supporting network security
+
+### Development Mode
+
+Run a local development network:
+
+```bash
+tempo node \
+  --dev \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --http.corsdomain "*"
+```
+
+**Features:**
+- Instant block production
+- Pre-funded dev accounts
+- All hardforks active
+- No P2P networking
+
+**Use cases:**
+- Smart contract development
+- Integration testing
+- Rapid prototyping
+
+## Connecting to Networks
+
+### Mainnet (Presto)
+
+Production network:
+
+```bash
+tempo node --chain mainnet
+```
+
+**Network details:**
+- Chain ID: `4217`
+- Currency: `USD`
+- RPC: `https://rpc.testnet.tempo.xyz`
+- Explorer: `https://explore.tempo.xyz`
+
+### Testnet (Moderato)
+
+Primary testnet:
+
+```bash
+tempo node --chain moderato
+```
+
+**Network details:**
+- Chain ID: `42431`
+- Currency: `USD`
+- RPC: `https://rpc.moderato.tempo.xyz`
+- WebSocket: `wss://rpc.moderato.tempo.xyz`
+- Explorer: `https://explore.tempo.xyz`
+- Faucet: Available
+
+### Alternative Testnet (Andantino)
+
+```bash
+tempo node --chain testnet
+```
+
+**Network details:**
+- Chain ID: `42429`
+- RPC: `wss://rpc.testnet.tempo.xyz`
+
+## Testing Your Node
+
+### Check Node Health
+
+Verify your node is running:
+
+```bash
+cast block-number --rpc-url http://localhost:8545
+```
+
+### Test RPC Endpoint
+
+Make a basic RPC call:
+
+```bash
+cast rpc eth_blockNumber --rpc-url http://localhost:8545
+```
+
+### Check Peer Count
+
+```bash
+cast rpc net_peerCount --rpc-url http://localhost:8545
+```
+
+Healthy nodes typically have 5-50 peers.
+
+### Get Chain ID
+
+```bash
+cast chain-id --rpc-url http://localhost:8545
+```
+
+### Test WebSocket Connection
+
+```bash
+wscat -c ws://localhost:8546 -x '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+## Monitoring
+
+### Logs
+
+View node logs:
+
+```bash
+# If running in foreground, logs appear in terminal
+
+# If running as systemd service:
+sudo journalctl -u tempo -f
+
+# If running in Docker:
+docker logs -f tempo-node
+```
+
+### Metrics
+
+Consensus metrics are exposed on the metrics endpoint:
+
+```bash
+curl http://localhost:8001/metrics
+```
+
+Key metrics to monitor:
+- `consensus_block_height`: Current block height
+- `consensus_peer_count`: Number of connected consensus peers
+- `consensus_proposals_total`: Proposals made
+- `consensus_view_number`: Current consensus view
+
+### System Resources
+
+Monitor resource usage:
+
+```bash
+# CPU and memory
+top -p $(pgrep tempo)
+
+# Disk I/O
+iotop -p $(pgrep tempo)
+
+# Network
+iftop
+```
+
+### Health Checks
+
+Create a simple health check script:
+
+```bash health-check.sh
+#!/bin/bash
+
+# Check if process is running
+if ! pgrep -x "tempo" > /dev/null; then
+    echo "ERROR: Tempo process not running"
+    exit 1
+fi
+
+# Check RPC responsiveness
+if ! cast block-number --rpc-url http://localhost:8545 > /dev/null 2>&1; then
+    echo "ERROR: RPC not responding"
+    exit 1
+fi
+
+echo "OK: Node is healthy"
+exit 0
+```
+
+## Running as a Service
+
+### Systemd Service
+
+Create a systemd service for automatic startup:
+
+```ini /etc/systemd/system/tempo.service
+[Unit]
+Description=Tempo Node
+After=network.target
+
+[Service]
+Type=simple
+User=tempo
+Group=tempo
+WorkingDirectory=/var/lib/tempo
+ExecStart=/usr/local/bin/tempo node \
+  --chain moderato \
+  --datadir /var/lib/tempo \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tempo
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Manage the service:
+
+```bash
+# Create tempo user
+sudo useradd -r -s /bin/false tempo
+sudo mkdir -p /var/lib/tempo
+sudo chown tempo:tempo /var/lib/tempo
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable tempo
+sudo systemctl start tempo
+
+# Check status
+sudo systemctl status tempo
+
+# View logs
+sudo journalctl -u tempo -f
+```
+
+### Docker Service
+
+Run as a Docker container:
+
+```bash
+docker run -d \
+  --name tempo-node \
+  --restart unless-stopped \
+  -p 30303:30303 \
+  -p 8545:8545 \
+  -p 8546:8546 \
+  -v tempo-data:/data \
+  ghcr.io/tempoxyz/tempo:latest \
+  node \
+  --chain moderato \
+  --datadir /data \
+  --http --http.addr 0.0.0.0 --http.port 8545 \
+  --ws --ws.addr 0.0.0.0 --ws.port 8546
+```
+
+## Firewall Configuration
+
+### Required Ports
+
+Open these ports in your firewall:
+
+| Port | Protocol | Purpose | Required For |
+|------|----------|---------|-------------|
+| 30303 | TCP/UDP | P2P execution layer | All nodes |
+| 8000 | TCP | Consensus P2P | Validators |
+| 8545 | TCP | HTTP RPC | Optional (if exposing RPC) |
+| 8546 | TCP | WebSocket RPC | Optional (if exposing RPC) |
+| 8001 | TCP | Consensus metrics | Optional (internal only) |
+
+### UFW Configuration
+
+```bash
+# Allow P2P
+sudo ufw allow 30303/tcp
+sudo ufw allow 30303/udp
+
+# Allow consensus (validators only)
+sudo ufw allow 8000/tcp
+
+# Allow RPC (if exposing publicly)
+sudo ufw allow 8545/tcp
+sudo ufw allow 8546/tcp
+```
+
+### iptables Configuration
+
+```bash
+# Allow P2P
+sudo iptables -A INPUT -p tcp --dport 30303 -j ACCEPT
+sudo iptables -A INPUT -p udp --dport 30303 -j ACCEPT
+
+# Allow consensus
+sudo iptables -A INPUT -p tcp --dport 8000 -j ACCEPT
+```
+
+## Stopping Your Node
+
+### Graceful Shutdown
+
+```bash
+# If running in foreground
+Ctrl+C
+
+# If running as systemd service
+sudo systemctl stop tempo
+
+# If running in Docker
+docker stop tempo-node
+```
+
+### Force Stop
+
+Only if graceful shutdown fails:
+
+```bash
+# Kill process
+kill $(pgrep tempo)
+
+# Force kill if necessary
+kill -9 $(pgrep tempo)
+```
+
+## Troubleshooting
+
+### Node Won't Start
+
+Check logs for errors:
+
+```bash
+tempo node --chain moderato 2>&1 | tee tempo-startup.log
+```
+
+Common issues:
+- Port already in use
+- Insufficient disk space
+- Corrupted database
+- Missing signing keys (validators)
+
+### No Peers
+
+If your node has zero peers:
+
+```bash
+# Check firewall
+sudo ufw status
+
+# Verify port is listening
+netstat -tulpn | grep 30303
+
+# Check network connectivity
+ping -c 3 rpc.moderato.tempo.xyz
+```
+
+### Sync Stuck
+
+If sync appears stuck:
+
+```bash
+# Check if still progressing (wait a few minutes between checks)
+cast block-number --rpc-url http://localhost:8545
+
+# Restart node
+sudo systemctl restart tempo
+
+# If still stuck, resync from snapshot
+rm -rf ~/.tempo/moderato/db
+tempo download --chain moderato
+```
+
+### High Resource Usage
+
+```bash
+# Check disk usage
+df -h ~/.tempo/moderato
+
+# Check memory
+free -h
+
+# Reduce memory usage by limiting cache
+tempo node --chain moderato --max-cache-size 2048
+```
+
+## Next Steps
+
+- [Maintenance](/node/maintenance) - Keep your node updated and healthy
+- [API Reference](/api/overview) - Learn how to interact with your node's RPC

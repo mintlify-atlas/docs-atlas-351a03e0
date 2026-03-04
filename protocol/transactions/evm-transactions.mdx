@@ -1,0 +1,401 @@
+---
+title: EVM Transactions
+description: Standard Ethereum transaction support in Tempo Protocol
+---
+
+Tempo Protocol supports standard Ethereum transaction types for compatibility with existing wallets, tools, and smart contracts.
+
+## Supported Transaction Types
+
+### Legacy (Type 0x00)
+
+Original Ethereum transaction format with `gasPrice` field.
+
+```typescript
+interface TxLegacy {
+  chain_id?: ChainId;
+  nonce: u64;
+  gas_price: u128;
+  gas_limit: u64;
+  to: TxKind;          // Call or Create
+  value: U256;
+  input: Bytes;
+}
+```
+
+**Use Cases:**
+- Backward compatibility with older tools
+- Simple transfers without dynamic fees
+- Legacy contract interactions
+
+### EIP-2930 (Type 0x01)
+
+Access list transactions that declare storage slots accessed during execution.
+
+```typescript
+interface TxEip2930 {
+  chain_id: ChainId;
+  nonce: u64;
+  gas_price: u128;
+  gas_limit: u64;
+  to: TxKind;
+  value: U256;
+  input: Bytes;
+  access_list: AccessList;  // Pre-declared storage access
+}
+```
+
+**Benefits:**
+- Reduced gas costs for pre-declared storage access
+- Predictable gas usage
+- Protection against gas price increases mid-execution
+
+### EIP-1559 (Type 0x02)
+
+Dynamic fee transactions with base fee and priority fee.
+
+```typescript
+interface TxEip1559 {
+  chain_id: ChainId;
+  nonce: u64;
+  max_priority_fee_per_gas: u128;  // Tip to validators
+  max_fee_per_gas: u128;           // Maximum willing to pay
+  gas_limit: u64;
+  to: TxKind;
+  value: U256;
+  input: Bytes;
+  access_list: AccessList;
+}
+```
+
+**Benefits:**
+- Predictable gas pricing with base fee
+- Better UX (no need to guess gas price)
+- Priority fees for faster inclusion
+- Refund of excess fees
+
+**Gas Calculation:**
+```
+effective_gas_price = min(max_fee_per_gas, base_fee + max_priority_fee_per_gas)
+```
+
+This is the **recommended transaction type** for most use cases on Tempo.
+
+### EIP-7702 (Type 0x04)
+
+Set Code transactions for temporary account delegation.
+
+```typescript
+interface TxEip7702 {
+  chain_id: ChainId;
+  nonce: u64;
+  max_priority_fee_per_gas: u128;
+  max_fee_per_gas: u128;
+  gas_limit: u64;
+  to: Address;
+  value: U256;
+  input: Bytes;
+  access_list: AccessList;
+  authorization_list: SignedAuthorization[];  // Delegations
+}
+```
+
+**Authorization Structure:**
+```typescript
+interface SignedAuthorization {
+  chain_id: ChainId;
+  address: Address;      // Contract to delegate to
+  nonce: u64;           // Authorization nonce
+  signature: Signature;  // EOA signature authorizing delegation
+}
+```
+
+**Use Cases:**
+- Temporary smart contract wallet functionality
+- Batch operations from EOAs
+- Account abstraction patterns
+- One-time delegated execution
+
+**Note:** Tempo Transactions have their own authorization list type that supports multiple signature algorithms (see [Tempo Transaction](/protocol/transactions/tempo-transaction)).
+
+## Unsupported Transaction Types
+
+### EIP-4844 (Type 0x03) - Not Supported
+
+Blob transactions (EIP-4844) are **not supported** by Tempo Protocol.
+
+**Reason:** Tempo uses a different approach to data availability that doesn't rely on blob transactions. Attempts to submit EIP-4844 transactions will be rejected.
+
+## Differences from Ethereum
+
+While Tempo supports standard EVM transaction types, there are some differences:
+
+### Gas Pricing
+
+**TIP-1000 State Creation Costs:**
+
+Tempo has higher gas costs for state creation operations to protect against state growth attacks:
+
+- **New state element** (SSTORE zero → non-zero): 250,000 gas (vs. 20,000 on Ethereum)
+- **Account creation** (first nonce write): 250,000 gas (vs. 0 on Ethereum)
+- **Contract creation**: 1,000 gas per byte + 500,000 gas for metadata
+
+See [TIP-1000: State Creation Cost Increase](https://github.com/tempo-labs/tempo/blob/main/tips/tip-1000.md) for details.
+
+### Transaction Pool
+
+- **Higher throughput**: Optimized for ~20,000 TPS
+- **Parallel processing**: More aggressive transaction parallelization
+- **Expiry**: Transactions may expire faster due to high throughput
+
+### Block Time
+
+- **Tempo**: Sub-second block times (typically ~400ms)
+- **Ethereum**: ~12 seconds
+
+This affects transaction confirmation times and reorganization risks.
+
+### Nonce Management
+
+EVM transactions use sequential nonces like standard Ethereum:
+
+```typescript
+// Sequential only - transactions must execute in order
+const tx1 = { nonce: 5 };
+const tx2 = { nonce: 6 };  // Must wait for tx1
+```
+
+For parallel execution, use [Tempo Transactions](/protocol/transactions/tempo-transaction) with 2D nonces.
+
+## Transaction Envelope
+
+Tempo uses a unified transaction envelope that includes all supported types:
+
+```rust
+pub enum TempoTxEnvelope {
+    Legacy(Signed<TxLegacy>),
+    Eip2930(Signed<TxEip2930>),
+    Eip1559(Signed<TxEip1559>),
+    Eip7702(Signed<TxEip7702>),
+    AA(AASigned),  // Tempo Transaction
+}
+```
+
+Source: [`envelope.rs:40-60`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/envelope.rs#L40-L60)
+
+### Transaction Type Detection
+
+The transaction type is determined by the first byte:
+
+```
+0x00 - 0x7f: Typed transaction (byte is type ID)
+0x80 - 0xff: Legacy transaction (RLP list)
+```
+
+## RPC Support
+
+Tempo's RPC interface supports standard Ethereum methods:
+
+- `eth_sendRawTransaction`: Submit signed transactions
+- `eth_call`: Simulate contract calls
+- `eth_estimateGas`: Estimate gas for transactions
+- `eth_getTransactionByHash`: Get transaction details
+- `eth_getTransactionReceipt`: Get execution receipt
+
+All EVM transaction types are supported through these methods.
+
+## Signature Recovery
+
+All EVM transactions use secp256k1 signature recovery:
+
+```rust
+impl SignerRecoverable for TempoTxEnvelope {
+    fn recover_signer(&self) -> Result<Address, RecoveryError> {
+        match self {
+            Self::Legacy(tx) => tx.recover_signer(),
+            Self::Eip2930(tx) => tx.recover_signer(),
+            Self::Eip1559(tx) => tx.recover_signer(),
+            Self::Eip7702(tx) => tx.recover_signer(),
+            Self::AA(tx) => tx.recover_signer(),  // Multiple algorithms
+        }
+    }
+}
+```
+
+Source: [`envelope.rs:220-238`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/envelope.rs#L220-L238)
+
+## Wallet Compatibility
+
+Tempo is compatible with standard Ethereum wallets:
+
+### Supported Wallets
+
+- **MetaMask**: Full support for all EVM transaction types
+- **Hardware Wallets**: Ledger, Trezor support via standard interfaces
+- **WalletConnect**: Compatible with WalletConnect v2
+- **Other Web3 Wallets**: Any wallet supporting standard Ethereum JSON-RPC
+
+### Configuration
+
+Add Tempo as a custom network:
+
+```typescript
+const tempoNetwork = {
+  chainId: '0x....',        // Tempo chain ID
+  chainName: 'Tempo',
+  nativeCurrency: {
+    name: 'Tempo',
+    symbol: 'TEMPO',
+    decimals: 18
+  },
+  rpcUrls: ['https://rpc.tempo.network'],
+  blockExplorerUrls: ['https://explorer.tempo.network']
+};
+
+await window.ethereum.request({
+  method: 'wallet_addEthereumChain',
+  params: [tempoNetwork]
+});
+```
+
+## System Transactions
+
+Tempo uses special system transactions for protocol operations:
+
+```rust
+pub const TEMPO_SYSTEM_TX_SIGNATURE: Signature = Signature::new(U256::ZERO, U256::ZERO, false);
+pub const TEMPO_SYSTEM_TX_SENDER: Address = Address::ZERO;
+```
+
+**System Transaction Rules:**
+- Uses legacy transaction format
+- Special zero signature: `Signature(0, 0, false)`
+- Sender is `Address::ZERO`
+- All gas fields must be zero
+- Nonce must be zero
+- Value must be zero
+
+**Use Cases:**
+- Block rewards distribution
+- Protocol state transitions
+- Validator set updates
+
+Source: [`envelope.rs:17-21`](https://github.com/tempo-labs/tempo/blob/main/crates/primitives/src/transaction/envelope.rs#L17-L21)
+
+## Examples
+
+### EIP-1559 Transfer (Recommended)
+
+```typescript
+import { ethers } from 'ethers';
+
+const provider = new ethers.providers.JsonRpcProvider('https://rpc.tempo.network');
+const wallet = new ethers.Wallet(privateKey, provider);
+
+const tx = await wallet.sendTransaction({
+  to: recipientAddress,
+  value: ethers.utils.parseEther('1.0'),
+  maxFeePerGas: ethers.utils.parseUnits('20', 'gwei'),
+  maxPriorityFeePerGas: ethers.utils.parseUnits('2', 'gwei'),
+});
+
+await tx.wait();
+```
+
+### EIP-2930 with Access List
+
+```typescript
+const tx = await wallet.sendTransaction({
+  to: contractAddress,
+  data: encodedCalldata,
+  gasPrice: ethers.utils.parseUnits('10', 'gwei'),
+  accessList: [
+    {
+      address: contractAddress,
+      storageKeys: [
+        ethers.utils.hexZeroPad('0x1', 32),  // Storage slot 1
+        ethers.utils.hexZeroPad('0x2', 32),  // Storage slot 2
+      ]
+    }
+  ],
+  type: 1,  // EIP-2930
+});
+```
+
+### Contract Deployment
+
+```typescript
+const factory = new ethers.ContractFactory(abi, bytecode, wallet);
+
+const contract = await factory.deploy(constructorArg1, constructorArg2, {
+  maxFeePerGas: ethers.utils.parseUnits('30', 'gwei'),
+  maxPriorityFeePerGas: ethers.utils.parseUnits('3', 'gwei'),
+});
+
+await contract.deployed();
+```
+
+## Gas Estimation
+
+### Standard Estimation
+
+```typescript
+const gasEstimate = await provider.estimateGas({
+  to: contractAddress,
+  data: encodedCalldata,
+  from: senderAddress,
+});
+
+// Add buffer for safety (e.g., 20%)
+const gasLimit = gasEstimate.mul(120).div(100);
+```
+
+### Account Creation Cost
+
+For transactions that create new accounts or state:
+
+```typescript
+// First transaction from an account
+const accountCreationGas = 250_000;  // TIP-1000
+
+// First time writing to a storage slot
+const newStateGas = 250_000;  // TIP-1000
+
+// Total for first transaction to new recipient
+const totalGas = baseGas + accountCreationGas + newStateGas;
+```
+
+## Fee Market
+
+Tempo uses an EIP-1559-style fee market:
+
+### Base Fee
+
+```
+base_fee_next = base_fee_current × (1 + adjustment)
+
+adjustment = (gas_used - gas_target) / gas_target / 8
+```
+
+### Priority Fee
+
+Validators receive the priority fee (tip):
+
+```
+validator_tip = min(max_priority_fee_per_gas, max_fee_per_gas - base_fee)
+```
+
+### Total Cost
+
+```
+total_cost = gas_used × effective_gas_price
+effective_gas_price = min(max_fee_per_gas, base_fee + max_priority_fee_per_gas)
+```
+
+## Related Documentation
+
+- [Transaction Types Overview](/protocol/transactions/overview)
+- [Tempo Transaction](/protocol/transactions/tempo-transaction)
+- [Gas and Fees](/protocol/fees/overview)
+- [TIP-1000: State Creation Costs](https://github.com/tempo-labs/tempo/blob/main/tips/tip-1000.md)
+- [Ethereum Transaction Types](https://ethereum.org/en/developers/docs/transactions/)

@@ -1,0 +1,426 @@
+---
+title: Rust SDK
+description: Native Rust bindings for Tempo with tempo-alloy
+---
+
+The Rust SDK provides type-safe, high-performance bindings for building on Tempo. Built with [Alloy](https://alloy.rs), it gives Rust developers native access to TIP-20 tokens, batch payments, and Tempo-specific transaction types.
+
+## Installation
+
+Add `tempo-alloy` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+tempo-alloy = { git = "https://github.com/tempoxyz/tempo" }
+alloy = { version = "0.7", features = ["providers", "rpc-types-eth", "sol-types"] }
+tokio = { version = "1", features = ["full"] }
+```
+
+<Note>
+  `tempo-alloy` is currently in development. Install from the GitHub repository until it's published to crates.io.
+</Note>
+
+## Quick Start
+
+### Configure Provider
+
+Connect to Tempo using `TempoNetwork`:
+
+```rust
+use alloy::providers::{Provider, ProviderBuilder};
+use tempo_alloy::TempoNetwork;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect("https://rpc.moderato.tempo.xyz")
+        .await?;
+
+    let block_number = provider.get_block_number().await?;
+    println!("Current block: {}", block_number);
+
+    Ok(())
+}
+```
+
+### Get Token Balance
+
+Query TIP-20 token balances:
+
+```rust
+use alloy::primitives::address;
+use alloy::providers::ProviderBuilder;
+use tempo_alloy::{TempoNetwork, contracts::precompiles::ITIP20};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    let token = ITIP20::new(
+        address!("0x20c0000000000000000000000000000000000001"), // AlphaUSD
+        &provider,
+    );
+
+    let balance = token
+        .balanceOf(address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"))
+        .call()
+        .await?;
+
+    println!("Balance: {:?}", balance._0);
+
+    Ok(())
+}
+```
+
+### Send Transfer
+
+Send a TIP-20 token transfer:
+
+```rust
+use alloy::primitives::{U256, address};
+use alloy::providers::ProviderBuilder;
+use tempo_alloy::{TempoNetwork, contracts::precompiles::ITIP20};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    let token = ITIP20::new(
+        address!("0x20c0000000000000000000000000000000000001"),
+        &provider,
+    );
+
+    let receipt = token
+        .transfer(
+            address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+            U256::from(100_000_000), // 100 tokens (6 decimals)
+        )
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    println!("Transfer successful: {:?}", receipt.transaction_hash);
+
+    Ok(())
+}
+```
+
+## Key Types
+
+### TempoNetwork
+
+The core network configuration for Tempo:
+
+```rust
+use tempo_alloy::TempoNetwork;
+use alloy::providers::ProviderBuilder;
+
+// Create a provider with Tempo network types
+let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+    .connect("https://rpc.moderato.tempo.xyz")
+    .await?;
+```
+
+`TempoNetwork` provides:
+- `TxType`: Tempo transaction types (Legacy, EIP-1559, EIP-2930, EIP-7702, AA)
+- `TxEnvelope`: Signed transaction envelopes
+- `ReceiptEnvelope`: Transaction receipts with Tempo-specific fields
+- `TransactionRequest`: Builder for creating transactions
+
+### TempoTransactionRequest
+
+Build Tempo-specific transactions:
+
+```rust
+use tempo_alloy::rpc::TempoTransactionRequest;
+use tempo_alloy::primitives::transaction::Call;
+use alloy::primitives::{Address, U256, Bytes};
+
+let request = TempoTransactionRequest {
+    calls: vec![
+        Call {
+            to: token_address.into(),
+            input: transfer_calldata.into(),
+            value: U256::ZERO,
+        },
+    ],
+    fee_token: Some(token_address),
+    valid_after: Some(1234567890),
+    valid_before: Some(1234567900),
+    ..Default::default()
+};
+```
+
+### TIP-20 Interface
+
+Type-safe contract bindings:
+
+```rust
+use tempo_alloy::contracts::precompiles::ITIP20;
+
+// Create a contract instance
+let token = ITIP20::new(token_address, &provider);
+
+// Call read-only functions
+let name = token.name().call().await?;
+let symbol = token.symbol().call().await?;
+let decimals = token.decimals().call().await?;
+let total_supply = token.totalSupply().call().await?;
+
+// Send transactions
+let receipt = token
+    .transfer(recipient, amount)
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+## TIP-20 Tokens
+
+### Transfer with Memo
+
+Include reconciliation data:
+
+```rust
+use alloy::primitives::B256;
+
+let memo = B256::left_padding_from("INV-12345".as_bytes());
+
+let receipt = token
+    .transferWithMemo(
+        address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+        U256::from(100_000_000),
+        memo,
+    )
+    .send()
+    .await?
+    .get_receipt()
+    .await?;
+```
+
+### Watch Transfer Events
+
+Listen for incoming transfers:
+
+```rust
+use futures::StreamExt;
+
+let mut transfers = token
+    .Transfer_filter()
+    .watch()
+    .await?
+    .into_stream();
+
+while let Some(Ok((transfer, _))) = transfers.next().await {
+    println!(
+        "Transfer: {} -> {}: {}",
+        transfer.from, transfer.to, transfer.value
+    );
+}
+```
+
+### Filter Transfer Events
+
+Query historical transfers:
+
+```rust
+let filter = token
+    .Transfer_filter()
+    .from_block(0)
+    .to_block(1000);
+
+let transfers = filter.query().await?;
+
+for (transfer, log) in transfers {
+    println!("Block {}: {} tokens", log.block_number, transfer.value);
+}
+```
+
+## Batch Payments
+
+Send multiple transfers atomically:
+
+```rust
+use alloy::sol_types::SolCall;
+use alloy::providers::Provider;
+use tempo_alloy::primitives::transaction::Call;
+use tempo_alloy::rpc::TempoTransactionRequest;
+use tempo_alloy::contracts::precompiles::ITIP20;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+        .connect(&std::env::var("RPC_URL")?)
+        .await?;
+
+    let token_address = address!("0x20c0000000000000000000000000000000000001");
+
+    let calls = vec![
+        Call {
+            to: token_address.into(),
+            input: ITIP20::transferCall {
+                to: address!("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbb"),
+                amount: U256::from(100_000_000),
+            }
+            .abi_encode()
+            .into(),
+            value: U256::ZERO,
+        },
+        Call {
+            to: token_address.into(),
+            input: ITIP20::transferCall {
+                to: address!("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"),
+                amount: U256::from(50_000_000),
+            }
+            .abi_encode()
+            .into(),
+            value: U256::ZERO,
+        },
+    ];
+
+    let pending = provider
+        .send_transaction(TempoTransactionRequest {
+            calls,
+            ..Default::default()
+        })
+        .await?;
+
+    let tx_hash = pending.tx_hash();
+    println!("Batch transaction sent: {:?}", tx_hash);
+
+    Ok(())
+}
+```
+
+## Advanced Provider Configuration
+
+### Random 2D Nonces
+
+Use random 2D nonces for parallel transaction submission:
+
+```rust
+use tempo_alloy::provider::TempoProviderBuilderExt;
+
+let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+    .with_random_2d_nonces()
+    .connect("https://rpc.moderato.tempo.xyz")
+    .await?;
+```
+
+### Expiring Nonces
+
+Use expiring nonces (TIP-1009) for transaction management:
+
+```rust
+use tempo_alloy::provider::TempoProviderBuilderExt;
+
+let provider = ProviderBuilder::new_with_network::<TempoNetwork>()
+    .with_expiring_nonces()
+    .connect("https://rpc.moderato.tempo.xyz")
+    .await?;
+```
+
+See [TIP-1009](https://docs.tempo.xyz/protocol/tips/tip-1009) for details on expiring nonces.
+
+## Module Structure
+
+The `tempo-alloy` crate is organized into:
+
+```rust
+use tempo_alloy::{
+    TempoNetwork,                    // Network configuration
+    contracts::precompiles::*,       // TIP-20, TIP-403, and other precompiles
+    primitives::*,                   // Core Tempo types
+    provider::TempoProviderBuilderExt, // Provider extensions
+    rpc::*,                          // RPC types and transaction builders
+    fillers::*,                      // Transaction fillers (nonces, gas, etc.)
+};
+```
+
+See [`crates/alloy/src/lib.rs`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/src/lib.rs) for the complete module layout.
+
+## Examples
+
+The Tempo repository includes comprehensive examples:
+
+| Example | Description |
+|---------|-------------|
+| [`configure_provider`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/configure_provider.rs) | Connect to Tempo |
+| [`get_balance`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/get_balance.rs) | Query token balances |
+| [`transfer`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/transfer.rs) | Send basic transfer |
+| [`transfer_with_memo`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/transfer_with_memo.rs) | Transfer with reconciliation data |
+| [`batch_payments`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/batch_payments.rs) | Atomic multi-recipient payments |
+| [`watch_transfers`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/watch_transfers.rs) | Listen for transfer events |
+| [`watch_transfers_with_memo`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/watch_transfers_with_memo.rs) | Watch transfers with memos |
+| [`mint_tokens`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/mint_tokens.rs) | Mint TIP-20 tokens |
+| [`burn_tokens`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/burn_tokens.rs) | Burn TIP-20 tokens |
+| [`mint_fee_liquidity`](https://github.com/tempoxyz/tempo/blob/main/crates/alloy/examples/mint_fee_liquidity.rs) | Add fee pool liquidity |
+
+Run examples with:
+
+```bash
+cargo run --example <example_name> -p tempo-alloy
+```
+
+Set the `RPC_URL` environment variable first:
+
+```bash
+export RPC_URL="https://rpc.moderato.tempo.xyz"
+```
+
+## Error Handling
+
+Handle Alloy transport and contract errors:
+
+```rust
+use alloy::transports::TransportError;
+use alloy::contract::Error as ContractError;
+
+match token.transfer(recipient, amount).send().await {
+    Ok(pending) => {
+        let receipt = pending.get_receipt().await?;
+        println!("Success: {:?}", receipt.transaction_hash);
+    }
+    Err(e) => {
+        eprintln!("Transfer failed: {}", e);
+    }
+}
+```
+
+## Feature Flags
+
+Available Cargo features:
+
+```toml
+[dependencies]
+tempo-alloy = { 
+    git = "https://github.com/tempoxyz/tempo",
+    features = ["asm-keccak", "tempo-compat"]
+}
+```
+
+- `asm-keccak`: Use optimized assembly for keccak hashing
+- `tempo-compat`: Include Reth compatibility types for node integrations
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Alloy Documentation" icon="book" href="https://alloy.rs">
+    Learn about the Alloy framework
+  </Card>
+  <Card title="TIP-20 Reference" icon="coins" href="/protocol/tip20/overview">
+    Complete TIP-20 specification
+  </Card>
+  <Card title="Tempo Transactions" icon="file-lines" href="/concepts/tempo-transactions">
+    Account abstraction features
+  </Card>
+  <Card title="Source Code" icon="github" href="https://github.com/tempoxyz/tempo/tree/main/crates/alloy">
+    View the SDK source on GitHub
+  </Card>
+</CardGroup>

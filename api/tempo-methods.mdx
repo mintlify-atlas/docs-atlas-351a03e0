@@ -1,0 +1,378 @@
+---
+title: Tempo-Specific Methods
+description: Custom JSON-RPC methods unique to Tempo
+---
+
+Tempo extends the Ethereum JSON-RPC API with custom namespaces for consensus data, token queries, and Tempo-specific functionality.
+
+## Consensus Namespace
+
+The `consensus_*` namespace provides access to Tempo's consensus layer data, including finalization events and network identity transitions.
+
+### consensus_getFinalization
+
+Returns a finalized block with its BLS certificate.
+
+<ParamField path="query" type="object | string" required>
+  Query parameter - either `"latest"` for the most recent finalization, or `{"height": N}` for a specific block height
+</ParamField>
+
+<ResponseField name="epoch" type="uint64">
+  Consensus epoch number
+</ResponseField>
+
+<ResponseField name="view" type="uint64">
+  Consensus view number within the epoch
+</ResponseField>
+
+<ResponseField name="height" type="uint64 | null">
+  Block height (null if not yet stored)
+</ResponseField>
+
+<ResponseField name="digest" type="bytes32">
+  Block hash
+</ResponseField>
+
+<ResponseField name="certificate" type="string">
+  Hex-encoded BLS finalization certificate
+</ResponseField>
+
+**Example Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "consensus_getFinalization",
+  "params": ["latest"],
+  "id": 1
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "epoch": 42,
+    "view": 100,
+    "height": 1000,
+    "digest": "0x1234...",
+    "certificate": "0xabcd..."
+  }
+}
+```
+
+### consensus_getLatest
+
+Returns the current consensus state snapshot with both the latest finalized and notarized blocks.
+
+<ResponseField name="finalized" type="object | null">
+  Latest finalized block (see `consensus_getFinalization` response format)
+</ResponseField>
+
+<ResponseField name="notarized" type="object | null">
+  Latest notarized block if not yet finalized (see `consensus_getFinalization` response format)
+</ResponseField>
+
+**Example Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "consensus_getLatest",
+  "params": [],
+  "id": 1
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "finalized": {
+      "epoch": 42,
+      "view": 100,
+      "height": 1000,
+      "digest": "0x1234...",
+      "certificate": "0xabcd..."
+    },
+    "notarized": {
+      "epoch": 42,
+      "view": 101,
+      "height": 1001,
+      "digest": "0x5678...",
+      "certificate": "0xef01..."
+    }
+  }
+}
+```
+
+### consensus_subscribe
+
+Subscribes to consensus events stream (Notarized, Finalized, Nullified).
+
+<Note>
+This is a WebSocket subscription method. Events are pushed to subscribers as they occur.
+</Note>
+
+**Event Types:**
+
+**Notarized Event:**
+```json
+{
+  "type": "notarized",
+  "epoch": 42,
+  "view": 101,
+  "height": 1001,
+  "digest": "0x1234...",
+  "certificate": "0xabcd...",
+  "seen": 1735849200000
+}
+```
+
+**Finalized Event:**
+```json
+{
+  "type": "finalized",
+  "epoch": 42,
+  "view": 100,
+  "height": 1000,
+  "digest": "0x5678...",
+  "certificate": "0xef01...",
+  "seen": 1735849200000
+}
+```
+
+**Nullified Event:**
+```json
+{
+  "type": "nullified",
+  "epoch": 42,
+  "view": 99,
+  "seen": 1735849200000
+}
+```
+
+<ResponseField name="seen" type="uint64">
+  Unix timestamp in milliseconds when the event was observed
+</ResponseField>
+
+### consensus_getIdentityTransitionProof
+
+Returns identity transition proofs showing the history of network public key changes through DKG ceremonies.
+
+<ParamField path="fromEpoch" type="uint64 | null">
+  Optional epoch to start searching from (defaults to latest finalized epoch)
+</ParamField>
+
+<ParamField path="full" type="boolean">
+  If true, returns all transitions back to genesis. If false (default), returns only the most recent transition.
+</ParamField>
+
+<ResponseField name="identity" type="string">
+  Hex-encoded BLS public key of the requested epoch's network identity
+</ResponseField>
+
+<ResponseField name="transitions" type="array">
+  Array of identity transitions, ordered newest to oldest. Empty if no full DKG ceremonies have occurred.
+</ResponseField>
+
+**Transition Object:**
+
+<ResponseField name="transitionEpoch" type="uint64">
+  Epoch where the full DKG ceremony occurred
+</ResponseField>
+
+<ResponseField name="oldIdentity" type="string">
+  Hex-encoded BLS public key before the transition
+</ResponseField>
+
+<ResponseField name="newIdentity" type="string">
+  Hex-encoded BLS public key after the transition
+</ResponseField>
+
+<ResponseField name="proof" type="object | null">
+  Cryptographic proof of the transition (null for genesis identity at epoch 0)
+</ResponseField>
+
+**Proof Object:**
+
+<ResponseField name="header" type="object">
+  Block header containing the new DKG outcome in extra_data
+</ResponseField>
+
+<ResponseField name="finalizationCertificate" type="string">
+  Hex-encoded finalization certificate signed by the old network identity
+</ResponseField>
+
+**Example Request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "consensus_getIdentityTransitionProof",
+  "params": [null, false],
+  "id": 1
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "identity": "0xabcd...",
+    "transitions": [
+      {
+        "transitionEpoch": 10,
+        "oldIdentity": "0x1234...",
+        "newIdentity": "0xabcd...",
+        "proof": {
+          "header": {
+            "hash": "0x5678...",
+            "number": "0xa",
+            "timestamp": "0x64abc123",
+            "extraData": "0xef01..."
+          },
+          "finalizationCertificate": "0x9876..."
+        }
+      }
+    ]
+  }
+}
+```
+
+## Token Namespace
+
+The `token_*` namespace provides queries for TIP-20 token data.
+
+### token_getTokens
+
+Returns paginated list of TIP-20 tokens deployed on Tempo.
+
+<ParamField path="params" type="object" required>
+  Pagination parameters with optional filters
+</ParamField>
+
+<ParamField path="params.limit" type="uint32">
+  Maximum number of results to return (default: 100)
+</ParamField>
+
+<ParamField path="params.cursor" type="string | null">
+  Pagination cursor from previous response (null for first page)
+</ParamField>
+
+<ParamField path="params.filter" type="object">
+  Optional filters (implementation-specific)
+</ParamField>
+
+<ResponseField name="items" type="array">
+  Array of token data objects
+</ResponseField>
+
+<ResponseField name="nextCursor" type="string | null">
+  Cursor for fetching the next page (null if no more results)
+</ResponseField>
+
+<Note>
+This method is currently unimplemented and returns an error.
+</Note>
+
+### token_getTokensByAddress
+
+Returns paginated list of TIP-20 tokens associated with an account address.
+
+<ParamField path="address" type="address" required>
+  Account address to query
+</ParamField>
+
+<ParamField path="params" type="object" required>
+  Pagination parameters with optional filters
+</ParamField>
+
+<ResponseField name="items" type="array">
+  Array of token data objects where the account has a balance or specific roles
+</ResponseField>
+
+<ResponseField name="nextCursor" type="string | null">
+  Cursor for fetching the next page
+</ResponseField>
+
+<Note>
+This method is currently unimplemented and returns an error.
+</Note>
+
+### token_getRoleHistory
+
+Returns paginated role change history for TIP-20 tokens.
+
+<ParamField path="params" type="object" required>
+  Pagination parameters with optional filters
+</ParamField>
+
+<ParamField path="params.filter" type="object">
+  Optional filters for role, account, or token address
+</ParamField>
+
+<ResponseField name="items" type="array">
+  Array of role change events (grants and revocations)
+</ResponseField>
+
+<ResponseField name="nextCursor" type="string | null">
+  Cursor for fetching the next page
+</ResponseField>
+
+Tracks role grants and revocations from the `RoleMembershipUpdated` event for audit trails and compliance monitoring.
+
+<Note>
+This method is currently unimplemented and returns an error.
+</Note>
+
+## Eth Extensions
+
+### eth_getTransactions
+
+Returns paginated transactions on Tempo with flexible filtering and sorting.
+
+<ParamField path="params" type="object" required>
+  Pagination parameters with optional filters
+</ParamField>
+
+<ParamField path="params.limit" type="uint32">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField path="params.cursor" type="string | null">
+  Pagination cursor from previous response
+</ParamField>
+
+<ParamField path="params.filter" type="object">
+  Optional filters for from address, to address, block range, etc.
+</ParamField>
+
+<ResponseField name="items" type="array">
+  Array of transaction objects
+</ResponseField>
+
+<ResponseField name="nextCursor" type="string | null">
+  Cursor for fetching the next page
+</ResponseField>
+
+Uses cursor-based pagination for stable iteration through transactions.
+
+<Note>
+This method is currently unimplemented and returns an error.
+</Note>
+
+## Next Steps
+
+<Card title="Admin Methods" icon="lock" href="/api/admin-methods">
+  Learn about administrative RPC methods for node operators
+</Card>

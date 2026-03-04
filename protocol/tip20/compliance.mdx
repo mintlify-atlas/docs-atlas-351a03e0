@@ -1,0 +1,701 @@
+---
+title: "Transfer Compliance"
+description: "TIP-403 policy integration and enforcement"
+---
+
+TIP-20 tokens integrate with the TIP-403 transfer policy registry to enforce programmable compliance rules on all token transfers, mints, and burns.
+
+## Overview
+
+Each TIP-20 token references a transfer policy by ID:
+
+```solidity
+// Policy ID (stored in token contract)
+uint64 public transferPolicyId;
+
+// TIP-403 Registry (protocol precompile)
+TIP403Registry constant TIP403_REGISTRY = 
+    TIP403Registry(0x403c000000000000000000000000000000000000);
+```
+
+Before executing any transfer, the token checks authorization:
+
+```solidity
+if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, from)
+    || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, to)) {
+    revert PolicyForbids();
+}
+```
+
+## Policy Types
+
+TIP-403 supports three policy types:
+
+### Whitelist Policies
+
+Only addresses on the whitelist can participate:
+
+```solidity
+// Policy: Only whitelisted addresses can send/receive
+policyType = PolicyType.WHITELIST
+
+// Check: Is address on whitelist?
+if (policyType == WHITELIST) {
+    return policySet[policyId][user];  // true if whitelisted
+}
+```
+
+**Use cases:**
+- KYC-required tokens (only verified users)
+- Private securities (only accredited investors)
+- Internal company tokens (only employees)
+
+### Blacklist Policies
+
+All addresses except those on the blacklist can participate:
+
+```solidity
+// Policy: Blocked addresses cannot send/receive
+policyType = PolicyType.BLACKLIST
+
+// Check: Is address blocked?
+if (policyType == BLACKLIST) {
+    return !policySet[policyId][user];  // true if not blocked
+}
+```
+
+**Use cases:**
+- Sanctions compliance (block OFAC addresses)
+- Fraud prevention (block compromised addresses)
+- Terms of service enforcement (block violators)
+
+### Compound Policies (TIP-1015)
+
+Different rules for senders, recipients, and mint recipients:
+
+```solidity
+struct CompoundPolicyData {
+    uint64 senderPolicyId;        // Policy for senders
+    uint64 recipientPolicyId;     // Policy for recipients  
+    uint64 mintRecipientPolicyId; // Policy for mint recipients
+}
+```
+
+**Use cases:**
+- Vendor credits (anyone can receive, only vendor can be paid)
+- Asymmetric compliance (different rules for in/out flows)
+- Restricted minting (tight control on issuance, loose on transfers)
+
+See [Compound Policies](#compound-policies-tip-1015) for details.
+
+## Transfer Authorization
+
+### Standard Transfers
+
+All transfer methods check both sender and recipient authorization:
+
+```solidity
+modifier transferAuthorized(address from, address to) {
+    if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, from)
+        || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, to)) {
+        revert PolicyForbids();
+    }
+    _;
+}
+
+function transfer(address to, uint256 amount)
+    external
+    notPaused
+    validRecipient(to)
+    transferAuthorized(msg.sender, to)  // Policy check
+    returns (bool)
+{
+    _transfer(msg.sender, to, amount);
+    return true;
+}
+```
+
+**Checked functions:**
+- `transfer(to, amount)`
+- `transferFrom(from, to, amount)`
+- `transferWithMemo(to, amount, memo)`
+- `transferFromWithMemo(from, to, amount, memo)`
+- `systemTransferFrom(from, to, amount)` (FeeManager only)
+
+### Mint Operations
+
+Mints check mint recipient authorization:
+
+```solidity
+function _mint(address to, uint256 amount) internal {
+    if (!TIP403_REGISTRY.isAuthorizedMintRecipient(transferPolicyId, to)) {
+        revert PolicyForbids();
+    }
+    
+    // ... perform mint
+}
+```
+
+**Why separate mint checks?**
+- Stricter control over token issuance
+- Prevent minting to unauthorized addresses
+- Support vendor credit scenarios (loose minting, tight transfers)
+
+### Burn Operations
+
+#### Standard Burn
+
+Burning from caller's own balance checks sender authorization:
+
+```solidity
+function burn(uint256 amount) external onlyRole(ISSUER_ROLE) {
+    // Checks sender authorization implicitly via _transfer
+    _transfer(msg.sender, address(0), amount);
+    _totalSupply -= uint128(amount);
+    emit Burn(msg.sender, amount);
+}
+```
+
+#### Burn Blocked (TIP-1015)
+
+Burning from blocked addresses requires sender to be unauthorized:
+
+```solidity
+function burnBlocked(address from, uint256 amount)
+    external
+    onlyRole(BURN_BLOCKED_ROLE)
+{
+    // Only allow burning from blocked addresses
+    if (TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, from)) {
+        revert PolicyForbids();  // Sender can still send, cannot burn
+    }
+    
+    // ... perform burn
+}
+```
+
+**Use case:** Seize funds from sanctioned addresses without affecting legitimate holders.
+
+#### Burn At (TIP-1006)
+
+Burning from any address bypasses policy checks:
+
+```solidity
+function burnAt(address from, uint256 amount)
+    external
+    onlyRole(BURN_AT_ROLE)
+{
+    // No policy check - privileged operation
+    // Still protects FeeManager and DEX addresses
+    
+    // ... perform burn
+}
+```
+
+**Use case:** Bridge contracts burning tokens without policy constraints.
+
+### Reward Operations
+
+Reward distribution and claims check policies:
+
+```solidity
+// Distributing rewards: sender to contract
+function distributeReward(uint256 amount) external notPaused {
+    if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, msg.sender)
+        || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, address(this))) {
+        revert PolicyForbids();
+    }
+    // ... distribute rewards
+}
+
+// Claiming rewards: contract to recipient
+function claimRewards() external notPaused returns (uint256) {
+    if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, address(this))
+        || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, msg.sender)) {
+        revert PolicyForbids();
+    }
+    // ... claim rewards
+}
+
+// Setting reward recipient
+function setRewardRecipient(address newRecipient) external notPaused {
+    if (newRecipient != address(0)) {
+        if (!TIP403_REGISTRY.isAuthorizedSender(transferPolicyId, msg.sender)
+            || !TIP403_REGISTRY.isAuthorizedRecipient(transferPolicyId, newRecipient)) {
+            revert PolicyForbids();
+        }
+    }
+    // ... set recipient
+}
+```
+
+## Built-In Policies
+
+The TIP-403 registry includes two built-in policies:
+
+```solidity
+// Policy 0: Always reject
+policyId = 0
+isAuthorized(0, anyAddress) == false
+
+// Policy 1: Always allow (default)
+policyId = 1  
+isAuthorized(1, anyAddress) == true
+```
+
+All TIP-20 tokens default to policy 1 (always-allow) on creation:
+
+```solidity
+uint64 public transferPolicyId = 1;
+```
+
+## Changing Policies
+
+Token administrators can change the active policy:
+
+```solidity
+function changeTransferPolicyId(uint64 newPolicyId)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE)
+{
+    // Validate policy exists
+    if (!TIP403_REGISTRY.policyExists(newPolicyId)) {
+        revert InvalidTransferPolicyId();
+    }
+    
+    emit TransferPolicyUpdate(msg.sender, transferPolicyId = newPolicyId);
+}
+```
+
+**Impact:**
+- Takes effect immediately
+- All future transfers use new policy
+- Existing balances are not affected
+- Users may become unable to transfer if newly unauthorized
+
+**Example flow:**
+```solidity
+// 1. Create new policy
+uint64 kycPolicyId = TIP403_REGISTRY.createWhitelistPolicy();
+
+// 2. Add KYC-verified addresses
+TIP403_REGISTRY.addToWhitelist(kycPolicyId, verifiedUser1);
+TIP403_REGISTRY.addToWhitelist(kycPolicyId, verifiedUser2);
+
+// 3. Switch token to new policy
+token.changeTransferPolicyId(kycPolicyId);
+
+// Now only verified users can transfer
+```
+
+## Compound Policies (TIP-1015)
+
+### Overview
+
+Compound policies enable different authorization rules for different transfer directions:
+
+```solidity
+struct CompoundPolicyData {
+    uint64 senderPolicyId;        // Who can send tokens
+    uint64 recipientPolicyId;     // Who can receive tokens
+    uint64 mintRecipientPolicyId; // Who can receive mints
+}
+```
+
+### Creating Compound Policies
+
+```solidity
+// Create component policies
+uint64 anyonePolicy = 1;  // Built-in always-allow
+uint64 vendorPolicy = TIP403_REGISTRY.createWhitelistPolicy();
+TIP403_REGISTRY.addToWhitelist(vendorPolicy, vendorAddress);
+
+// Create compound policy
+uint64 vendorCreditPolicy = TIP403_REGISTRY.createCompoundPolicy(
+    anyonePolicy,  // Anyone can send (spend credits)
+    vendorPolicy,  // Only vendor can receive
+    anyonePolicy   // Anyone can receive mints (get credits)
+);
+
+// Apply to token
+token.changeTransferPolicyId(vendorCreditPolicy);
+```
+
+**Result:**
+- Users can receive minted credits (mint recipient = anyone)
+- Users can spend credits only to vendor (recipient = vendor only)
+- Peer-to-peer transfers are blocked (recipient must be vendor)
+
+### Use Case: Vendor Credits
+
+```solidity
+contract VendorCredits {
+    ITIP20 public immutable creditToken;
+    address public immutable vendor;
+    
+    constructor(ITIP20 _token, address _vendor) {
+        creditToken = _token;
+        vendor = _vendor;
+        
+        // Set up compound policy
+        uint64 anyonePolicy = 1;
+        uint64 vendorOnlyPolicy = createVendorOnlyPolicy(_vendor);
+        
+        uint64 compoundPolicy = TIP403_REGISTRY.createCompoundPolicy(
+            anyonePolicy,      // Senders: anyone
+            vendorOnlyPolicy,  // Recipients: vendor only
+            anyonePolicy       // Mint recipients: anyone
+        );
+        
+        _token.changeTransferPolicyId(compoundPolicy);
+    }
+    
+    // Issue credits to users (anyone can receive)
+    function issueCredits(address user, uint256 amount) external {
+        creditToken.mint(user, amount);
+    }
+    
+    // User spends credits (only vendor can receive)
+    function redeemCredits(uint256 amount) external {
+        creditToken.transferFrom(msg.sender, vendor, amount);
+        // Vendor fulfills service
+    }
+}
+```
+
+### Use Case: Asymmetric Compliance
+
+Different rules for sending vs. receiving:
+
+```solidity
+// Senders must be KYC verified
+uint64 kycSenders = TIP403_REGISTRY.createWhitelistPolicy();
+
+// Recipients can be anyone (for refunds, seizures)
+uint64 anyRecipients = 1;
+
+// Mints require full compliance
+uint64 kycMintRecipients = kycSenders;  // Same as sender policy
+
+// Create asymmetric policy
+uint64 asymmetricPolicy = TIP403_REGISTRY.createCompoundPolicy(
+    kycSenders,          // Only KYC users can send
+    anyRecipients,       // Anyone can receive
+    kycMintRecipients    // Only KYC users can receive mints
+);
+```
+
+**Result:**
+- KYC users can send to anyone (including blocked addresses for seizures)
+- Non-KYC users cannot send
+- Non-KYC users can receive (e.g., refunds)
+- Only KYC users can receive new token issuance
+
+### Authorization Logic
+
+For compound policies, authorization delegates to component policies:
+
+```solidity
+function isAuthorizedSender(uint64 policyId, address user)
+    external view returns (bool)
+{
+    PolicyRecord storage record = policyRecords[policyId];
+    
+    if (record.base.policyType == PolicyType.COMPOUND) {
+        // Delegate to sender policy
+        return isAuthorized(record.compound.senderPolicyId, user);
+    }
+    
+    // For simple policies, sender auth = general auth
+    return isAuthorized(policyId, user);
+}
+```
+
+**Gas cost:** 1 keccak + 2 SLOADs for compound policies.
+
+### Immutability
+
+Compound policies are immutable once created:
+- Cannot change component policy IDs
+- No admin (admin = address(0))
+- Cannot add/remove addresses from compound policy itself
+
+**To change behavior:**
+1. Modify component policies (if they have admins)
+2. Or create new compound policy and switch token to it
+
+## Policy Administration
+
+### Creating Policies
+
+```solidity
+interface ITIP403Registry {
+    // Create whitelist policy
+    function createWhitelistPolicy() external returns (uint64 policyId);
+    
+    // Create blacklist policy
+    function createBlacklistPolicy() external returns (uint64 policyId);
+    
+    // Create compound policy (TIP-1015)
+    function createCompoundPolicy(
+        uint64 senderPolicyId,
+        uint64 recipientPolicyId,
+        uint64 mintRecipientPolicyId
+    ) external returns (uint64 policyId);
+}
+```
+
+**Policy IDs:**
+- Start at 2 (0 and 1 are built-in)
+- Increment sequentially
+- Unique across all policy types
+- Permanent (cannot be deleted)
+
+### Modifying Policies
+
+Simple policies (whitelist/blacklist) can be modified by their admin:
+
+```solidity
+// Add to whitelist/blacklist
+function addToSet(uint64 policyId, address user) external {
+    require(msg.sender == policyData[policyId].admin);
+    policySet[policyId][user] = true;
+    emit SetMembershipUpdated(policyId, user, true);
+}
+
+// Remove from whitelist/blacklist  
+function removeFromSet(uint64 policyId, address user) external {
+    require(msg.sender == policyData[policyId].admin);
+    policySet[policyId][user] = false;
+    emit SetMembershipUpdated(policyId, user, false);
+}
+
+// Batch operations
+function batchUpdateSet(
+    uint64 policyId,
+    address[] calldata users,
+    bool[] calldata statuses
+) external;
+```
+
+### Transferring Policy Admin
+
+```solidity
+function setPolicyAdmin(uint64 policyId, address newAdmin) external {
+    require(msg.sender == policyData[policyId].admin);
+    policyData[policyId].admin = newAdmin;
+    emit PolicyAdminUpdated(policyId, newAdmin);
+}
+```
+
+**Note:** Compound policies have no admin and cannot be modified.
+
+## Gas Costs
+
+### Policy Checks
+
+| Policy Type | Operation | Gas Cost |
+|-------------|-----------|----------|
+| Always-allow (policy 1) | Any transfer | ~0 (short-circuit) |
+| Whitelist | Check membership | ~2,100 (1 SLOAD) |
+| Blacklist | Check membership | ~2,100 (1 SLOAD) |
+| Compound | Check both sender/recipient | ~4,200 (2 SLOADs) |
+
+### Policy Creation
+
+| Operation | Gas Cost |
+|-----------|----------|
+| Create whitelist/blacklist | ~50,000 |
+| Create compound policy | ~100,000 |
+| Add to whitelist/blacklist (new) | ~250,000 (TIP-1000 state creation) |
+| Add to whitelist/blacklist (update) | ~5,000 |
+| Remove from whitelist/blacklist | ~5,000 |
+
+### Transfer Impact
+
+Policy checks add to total transfer cost:
+
+| Scenario | Base Cost | Policy Cost | Total |
+|----------|-----------|-------------|-------|
+| Transfer with always-allow | 50,000 | ~0 | ~50,000 |
+| Transfer with whitelist | 50,000 | ~4,200 | ~54,200 |
+| Transfer with compound | 50,000 | ~8,400 | ~58,400 |
+
+## Integration Patterns
+
+### KYC Token
+
+```solidity
+contract KYCToken {
+    ITIP20 public immutable token;
+    uint64 public immutable kycPolicyId;
+    
+    mapping(address => bool) public kycVerified;
+    
+    constructor(ITIP20 _token) {
+        token = _token;
+        
+        // Create KYC whitelist policy
+        kycPolicyId = TIP403_REGISTRY.createWhitelistPolicy();
+        
+        // Apply to token
+        _token.changeTransferPolicyId(kycPolicyId);
+    }
+    
+    function verifyUser(address user) external onlyAdmin {
+        kycVerified[user] = true;
+        TIP403_REGISTRY.addToWhitelist(kycPolicyId, user);
+    }
+    
+    function revokeUser(address user) external onlyAdmin {
+        kycVerified[user] = false;
+        TIP403_REGISTRY.removeFromWhitelist(kycPolicyId, user);
+    }
+}
+```
+
+### Sanctions Compliance
+
+```solidity
+contract SanctionsToken {
+    ITIP20 public immutable token;
+    uint64 public immutable sanctionsPolicyId;
+    
+    constructor(ITIP20 _token) {
+        token = _token;
+        
+        // Create sanctions blacklist
+        sanctionsPolicyId = TIP403_REGISTRY.createBlacklistPolicy();
+        
+        // Apply to token
+        _token.changeTransferPolicyId(sanctionsPolicyId);
+    }
+    
+    function blockAddress(address target) external onlyCompliance {
+        TIP403_REGISTRY.addToBlacklist(sanctionsPolicyId, target);
+    }
+    
+    function seizeFromBlocked(address blocked, uint256 amount) 
+        external 
+        onlyCompliance 
+    {
+        // Use burnBlocked to seize from blocked address
+        token.burnBlocked(blocked, amount);
+    }
+}
+```
+
+### Tiered Access
+
+```solidity
+contract TieredToken {
+    ITIP20 public immutable token;
+    
+    uint64 public tier1Policy;  // Basic access
+    uint64 public tier2Policy;  // Enhanced access
+    uint64 public tier3Policy;  // Full access
+    
+    function upgradeTier(address user, uint8 newTier) external onlyAdmin {
+        // Remove from old tier
+        if (tier1Policy != 0) TIP403_REGISTRY.removeFromWhitelist(tier1Policy, user);
+        if (tier2Policy != 0) TIP403_REGISTRY.removeFromWhitelist(tier2Policy, user);
+        if (tier3Policy != 0) TIP403_REGISTRY.removeFromWhitelist(tier3Policy, user);
+        
+        // Add to new tier
+        if (newTier == 1) TIP403_REGISTRY.addToWhitelist(tier1Policy, user);
+        else if (newTier == 2) TIP403_REGISTRY.addToWhitelist(tier2Policy, user);
+        else if (newTier == 3) TIP403_REGISTRY.addToWhitelist(tier3Policy, user);
+    }
+    
+    function setTokenTier(uint8 tier) external onlyAdmin {
+        if (tier == 1) token.changeTransferPolicyId(tier1Policy);
+        else if (tier == 2) token.changeTransferPolicyId(tier2Policy);
+        else if (tier == 3) token.changeTransferPolicyId(tier3Policy);
+    }
+}
+```
+
+## Error Handling
+
+```solidity
+error PolicyForbids();              // Transfer blocked by policy
+error InvalidTransferPolicyId();    // Policy does not exist
+```
+
+**Testing policy authorization:**
+```solidity
+// Check before attempting transfer
+if (!TIP403_REGISTRY.isAuthorizedSender(policyId, from)
+    || !TIP403_REGISTRY.isAuthorizedRecipient(policyId, to)) {
+    revert PolicyForbids();
+}
+
+// Or use try/catch
+try token.transfer(to, amount) returns (bool success) {
+    // Transfer succeeded
+} catch Error(string memory reason) {
+    if (keccak256(bytes(reason)) == keccak256("PolicyForbids()")) {
+        // Handle policy rejection
+    }
+}
+```
+
+## Best Practices
+
+### Policy Design
+
+1. **Start permissive, tighten later**
+   - Launch with policy 1 (always-allow)
+   - Collect KYC data off-chain
+   - Switch to whitelist when ready
+
+2. **Use compound policies for flexibility**
+   - Separate sender and recipient rules
+   - Enable one-way flows (e.g., refunds to blocked users)
+   - Support vendor credit models
+
+3. **Test policy changes**
+   - Verify policy exists before switching
+   - Check impact on existing holders
+   - Announce changes in advance
+
+### Security
+
+1. **Protect policy admin keys**
+   - Policy admin can authorize/block any address
+   - Consider multisig for policy administration
+   - Monitor policy modification events
+
+2. **Monitor for abuse**
+   - Track `SetMembershipUpdated` events
+   - Alert on unexpected policy changes
+   - Log policy switches for audit trail
+
+3. **Handle blocked users gracefully**
+   - Provide off-chain notification before blocking
+   - Support appeals process
+   - Document policy enforcement criteria
+
+### Gas Optimization
+
+1. **Batch policy updates**
+   - Use `batchUpdateSet` for multiple addresses
+   - Reduces transaction overhead
+   - Cheaper than individual calls
+
+2. **Reuse policies**
+   - Share policies across multiple tokens
+   - Reduces deployment costs
+   - Simplifies administration
+
+3. **Consider policy complexity**
+   - Simple policies are cheaper to check
+   - Compound policies add ~4,000 gas per transfer
+   - Balance compliance needs vs. gas costs
+
+## See Also
+
+- [Transfers](/protocol/tip20/transfers) - Transfer methods and gas costs
+- [Memos](/protocol/tip20/memos) - Payment references
+- [TIP-403](/protocol/precompiles/tip403-registry) - Transfer policy registry specification
+- [TIP-1015](/protocol/tips/tip-1015) - Compound policies specification

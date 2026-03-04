@@ -1,0 +1,660 @@
+---
+title: Maintenance
+description: Keep your Tempo node updated, backed up, and running smoothly
+---
+
+Regular maintenance ensures your Tempo node remains secure, performant, and in sync with the network.
+
+## Updates
+
+### Checking for Updates
+
+Check your current version:
+
+```bash
+tempo --version
+```
+
+Check the latest release:
+- Visit [GitHub Releases](https://github.com/tempoxyz/tempo/releases)
+- Follow [@tempoxyz](https://twitter.com/tempoxyz) for announcements
+- Join the [Discord community](https://discord.gg/tempo) for updates
+
+### Updating Binary Installation
+
+For nodes installed via the official installer:
+
+```bash
+# Re-run installer to get latest version
+curl -L https://tempo.xyz/install | bash
+
+# Restart your node
+sudo systemctl restart tempo
+```
+
+For manual installations:
+
+```bash
+# Download new release
+wget https://github.com/tempoxyz/tempo/releases/download/vX.Y.Z/tempo-vX.Y.Z-linux-amd64.tar.gz
+
+# Extract
+tar -xzf tempo-vX.Y.Z-linux-amd64.tar.gz
+
+# Stop node
+sudo systemctl stop tempo
+
+# Replace binary
+sudo mv tempo /usr/local/bin/
+sudo chmod +x /usr/local/bin/tempo
+
+# Start node
+sudo systemctl start tempo
+
+# Verify version
+tempo --version
+```
+
+### Updating from Source
+
+For nodes built from source:
+
+```bash
+cd ~/tempo
+
+# Fetch latest changes
+git fetch origin
+
+# Check out latest release
+git checkout vX.Y.Z
+
+# Or use main branch (less stable)
+git checkout main
+git pull
+
+# Rebuild
+just build-all
+
+# Stop node
+sudo systemctl stop tempo
+
+# Replace binary
+sudo cp target/release/tempo /usr/local/bin/
+
+# Start node
+sudo systemctl start tempo
+```
+
+### Updating Docker
+
+For Docker-based deployments:
+
+```bash
+# Pull latest image
+docker pull ghcr.io/tempoxyz/tempo:latest
+
+# Stop existing container
+docker stop tempo-node
+docker rm tempo-node
+
+# Start with new image (preserving data volume)
+docker run -d \
+  --name tempo-node \
+  --restart unless-stopped \
+  -p 30303:30303 -p 8545:8545 -p 8546:8546 \
+  -v tempo-data:/data \
+  ghcr.io/tempoxyz/tempo:latest \
+  node --chain moderato --datadir /data
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Update Safety
+
+**Before updating:**
+
+1. Read release notes for breaking changes
+2. Back up your data (especially for major versions)
+3. Plan for downtime if running a validator
+4. Test on testnet first if possible
+
+**After updating:**
+
+1. Monitor logs for errors
+2. Verify sync status
+3. Check peer connectivity
+4. Test RPC endpoints
+
+## Backups
+
+### What to Back Up
+
+#### Critical (Must Back Up)
+
+- **Validator keys**: Consensus signing keys and shares
+  - Location: Specified by `--consensus.signing-key` and `--consensus.signing-share`
+  - Impact if lost: Cannot validate blocks, loss of validator status
+
+```bash
+# Back up keys
+cp /etc/tempo/signing-key.hex /secure/backup/location/
+cp /etc/tempo/signing-share.hex /secure/backup/location/
+
+# Verify backup
+sha256sum /etc/tempo/signing-key.hex /secure/backup/location/signing-key.hex
+```
+
+#### Important (Recommended)
+
+- **Node configuration**: Command-line arguments or config files
+- **Systemd service file**: `/etc/systemd/system/tempo.service`
+
+```bash
+# Back up configuration
+cp /etc/systemd/system/tempo.service /backup/tempo.service
+
+# Document command-line args
+systemctl cat tempo > /backup/tempo-config.txt
+```
+
+#### Optional (Can Resync)
+
+- **Blockchain database**: Can be resynced from network or snapshot
+  - Location: `--datadir` (e.g., `~/.tempo/moderato/db`)
+  - Size: 100GB+ and growing
+  - Only back up if downtime for resync is unacceptable
+
+### Backup Procedures
+
+#### Validator Keys Backup
+
+**Method 1: Local backup**
+
+```bash
+#!/bin/bash
+# backup-keys.sh
+
+BACKUP_DIR="/secure/backup/$(date +%Y%m%d)"
+mkdir -p $BACKUP_DIR
+
+# Copy keys
+cp /etc/tempo/signing-key.hex $BACKUP_DIR/
+cp /etc/tempo/signing-share.hex $BACKUP_DIR/
+
+# Create checksums
+sha256sum $BACKUP_DIR/* > $BACKUP_DIR/checksums.txt
+
+# Encrypt backup (recommended)
+tar czf - $BACKUP_DIR | gpg -c > tempo-keys-$(date +%Y%m%d).tar.gz.gpg
+
+echo "Backup complete: tempo-keys-$(date +%Y%m%d).tar.gz.gpg"
+```
+
+**Method 2: Remote backup**
+
+```bash
+# Copy to remote server via SCP
+scp /etc/tempo/signing-*.hex user@backup-server:/secure/path/
+
+# Or use rsync
+rsync -avz /etc/tempo/signing-*.hex user@backup-server:/secure/path/
+```
+
+**Method 3: Hardware security module**
+
+For production validators, consider storing keys in a hardware security module (HSM) or hardware wallet.
+
+#### Database Backup
+
+Only if you need to avoid resync time:
+
+```bash
+# Stop node first
+sudo systemctl stop tempo
+
+# Backup database
+tar czf tempo-db-$(date +%Y%m%d).tar.gz ~/.tempo/moderato/db/
+
+# Or use rsync for incremental backups
+rsync -avz --delete ~/.tempo/moderato/db/ /backup/tempo-db/
+
+# Restart node
+sudo systemctl start tempo
+```
+
+**Note**: Backing up a live database can result in corruption. Always stop the node first.
+
+### Backup Verification
+
+Regularly test your backups:
+
+```bash
+# Verify key backups are readable
+cat /backup/signing-key.hex
+cat /backup/signing-share.hex
+
+# Verify checksums
+sha256sum -c /backup/checksums.txt
+
+# Test restore procedure on testnet
+```
+
+## Database Management
+
+### Database Location
+
+Default locations:
+- Linux: `~/.local/share/tempo/<chain-id>/db`
+- Custom: `<datadir>/<chain-id>/db`
+
+### Database Size
+
+Monitor database growth:
+
+```bash
+du -sh ~/.tempo/moderato/db/
+```
+
+Expected sizes (as of 2026):
+- **Moderato testnet**: ~50GB
+- **Mainnet**: ~100GB
+- **Growth rate**: ~1-2GB per week
+
+### Pruning
+
+Tempo automatically prunes old state by default. State older than 90,000 blocks (approximately 30 days) is removed.
+
+To verify pruning is active:
+
+```bash
+# Check logs for pruning messages
+sudo journalctl -u tempo | grep -i prune
+```
+
+### Database Corruption
+
+If your database becomes corrupted:
+
+```bash
+# Stop node
+sudo systemctl stop tempo
+
+# Remove database
+rm -rf ~/.tempo/moderato/db/
+
+# Resync from snapshot (recommended)
+tempo download --chain moderato
+
+# Or resync from genesis (slow)
+tempo node --chain moderato
+```
+
+### Clean Reinstall
+
+To start fresh:
+
+```bash
+# Stop node
+sudo systemctl stop tempo
+
+# Back up keys first!
+cp /etc/tempo/signing-*.hex /backup/
+
+# Remove all data
+rm -rf ~/.tempo/moderato/
+
+# Restore keys
+cp /backup/signing-*.hex /etc/tempo/
+
+# Resync
+tempo download --chain moderato
+tempo node --chain moderato
+```
+
+## Monitoring
+
+### Health Checks
+
+Implement automated health monitoring:
+
+```bash health-check.sh
+#!/bin/bash
+
+RPC_URL="http://localhost:8545"
+ALERT_EMAIL="admin@example.com"
+
+# Check if process is running
+if ! pgrep -x "tempo" > /dev/null; then
+    echo "CRITICAL: Tempo process not running" | mail -s "Tempo Alert" $ALERT_EMAIL
+    exit 1
+fi
+
+# Check RPC responsiveness
+if ! cast block-number --rpc-url $RPC_URL > /dev/null 2>&1; then
+    echo "CRITICAL: RPC not responding" | mail -s "Tempo Alert" $ALERT_EMAIL
+    exit 1
+fi
+
+# Check sync status
+SYNC_STATUS=$(cast rpc eth_syncing --rpc-url $RPC_URL)
+if [ "$SYNC_STATUS" != "false" ]; then
+    echo "WARNING: Node is syncing" | mail -s "Tempo Alert" $ALERT_EMAIL
+fi
+
+# Check peer count
+PEER_COUNT=$(cast rpc net_peerCount --rpc-url $RPC_URL | xargs printf "%d")
+if [ $PEER_COUNT -lt 3 ]; then
+    echo "WARNING: Low peer count: $PEER_COUNT" | mail -s "Tempo Alert" $ALERT_EMAIL
+fi
+
+echo "OK: All checks passed"
+```
+
+Run via cron:
+
+```bash
+# Add to crontab
+crontab -e
+
+# Run every 5 minutes
+*/5 * * * * /usr/local/bin/health-check.sh
+```
+
+### Metrics Collection
+
+Expose metrics for monitoring systems:
+
+```bash
+# Consensus metrics
+curl http://localhost:8001/metrics
+```
+
+Integrate with monitoring tools:
+- **Prometheus**: Scrape metrics endpoint
+- **Grafana**: Visualize metrics
+- **VictoriaMetrics**: Long-term storage
+
+### Key Metrics to Monitor
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| Peer count | < 3 | Check firewall, network connectivity |
+| Block height lag | > 10 blocks | Check sync status, restart if stuck |
+| Disk usage | > 80% | Expand storage or prune old data |
+| Memory usage | > 90% | Investigate memory leaks, restart |
+| CPU usage | > 80% sustained | Optimize configuration or upgrade hardware |
+
+### Log Management
+
+Manage log rotation:
+
+```bash /etc/logrotate.d/tempo
+/var/log/tempo/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 tempo tempo
+}
+```
+
+Query logs:
+
+```bash
+# View recent errors
+sudo journalctl -u tempo --since "1 hour ago" -p err
+
+# Follow logs in real-time
+sudo journalctl -u tempo -f
+
+# Search logs
+sudo journalctl -u tempo | grep -i "error\|warn"
+```
+
+## Performance Optimization
+
+### Hardware Recommendations
+
+**Minimum:**
+- 4 CPU cores
+- 8GB RAM
+- 500GB SSD
+- 10 Mbps network
+
+**Recommended:**
+- 8+ CPU cores
+- 16GB+ RAM
+- 1TB+ NVMe SSD
+- 100 Mbps network
+- Uninterruptible power supply (UPS)
+
+### Configuration Tuning
+
+#### Transaction Pool
+
+```bash
+tempo node \
+  --txpool.pending-max-count 50000 \
+  --txpool.queued-max-count 50000 \
+  --txpool.max-account-slots 150000
+```
+
+#### Consensus Performance
+
+```bash
+tempo node \
+  --consensus.worker-threads 4 \
+  --consensus.message-backlog 32768 \
+  --consensus.mailbox-size 32768
+```
+
+#### Cache Size
+
+```bash
+tempo node --max-cache-size 4096  # MB
+```
+
+### System Tuning
+
+#### File Descriptor Limits
+
+```bash
+# Increase limits
+sudo nano /etc/security/limits.conf
+
+# Add:
+tempo soft nofile 65536
+tempo hard nofile 65536
+```
+
+#### Network Tuning
+
+```bash
+# Optimize TCP
+sudo sysctl -w net.core.rmem_max=134217728
+sudo sysctl -w net.core.wmem_max=134217728
+sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 67108864"
+sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 67108864"
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### Node Crashes
+
+```bash
+# Check for out of memory
+sudo journalctl -u tempo | grep -i "out of memory"
+
+# Check for disk full
+df -h
+
+# Review crash logs
+sudo journalctl -u tempo --since "1 hour ago" -p crit
+```
+
+#### Sync Issues
+
+```bash
+# Check sync status
+cast rpc eth_syncing --rpc-url http://localhost:8545
+
+# Check peers
+cast rpc net_peerCount --rpc-url http://localhost:8545
+
+# Restart sync
+sudo systemctl restart tempo
+```
+
+#### High Resource Usage
+
+```bash
+# Check process stats
+top -p $(pgrep tempo)
+
+# Check disk I/O
+sudo iotop -p $(pgrep tempo)
+
+# Check open files
+lsof -p $(pgrep tempo) | wc -l
+```
+
+#### Validator Issues
+
+```bash
+# Check validator metrics
+curl http://localhost:8001/metrics | grep validator
+
+# Verify keys are loaded
+sudo journalctl -u tempo | grep -i "signing key"
+
+# Check consensus connectivity
+netstat -an | grep 8000
+```
+
+### Emergency Procedures
+
+#### Node Unresponsive
+
+```bash
+# Force restart
+sudo systemctl restart tempo
+
+# If still unresponsive
+sudo systemctl stop tempo
+sudo kill -9 $(pgrep tempo)
+sudo systemctl start tempo
+```
+
+#### Database Corruption
+
+```bash
+# Stop node
+sudo systemctl stop tempo
+
+# Back up current database
+mv ~/.tempo/moderato/db ~/.tempo/moderato/db.backup
+
+# Restore from snapshot
+tempo download --chain moderato
+
+# Restart
+sudo systemctl start tempo
+```
+
+#### Lost Validator Keys
+
+If you lose validator keys:
+
+1. Restore from backup immediately
+2. Verify keys with checksums
+3. Restart validator
+4. If keys are unrecoverable, you'll need to re-register as a validator
+
+## Security
+
+### Key Management
+
+- Store keys encrypted at rest
+- Use hardware security modules for production
+- Never share or commit keys to version control
+- Rotate keys periodically if supported
+- Back up keys to multiple secure locations
+
+### Access Control
+
+```bash
+# Restrict file permissions
+chmod 600 /etc/tempo/signing-*.hex
+chown tempo:tempo /etc/tempo/signing-*.hex
+
+# Limit RPC access
+# Bind to localhost only:
+--http.addr 127.0.0.1
+
+# Or use firewall rules:
+sudo ufw allow from 192.168.1.0/24 to any port 8545
+```
+
+### Regular Security Practices
+
+- Keep system packages updated
+- Monitor for security advisories
+- Use SSH keys instead of passwords
+- Enable automatic security updates
+- Run node with non-root user
+- Use firewall to restrict access
+
+## Best Practices
+
+### For All Operators
+
+- Monitor your node regularly
+- Keep backups of critical data
+- Test disaster recovery procedures
+- Subscribe to Tempo announcements
+- Update promptly when new versions are released
+- Document your configuration
+
+### For Validators
+
+- Maintain high uptime (>99%)
+- Have redundant internet connections
+- Use UPS for power backup
+- Monitor validator performance metrics
+- Keep signing keys secure and backed up
+- Test failover procedures
+- Join validator community channels
+
+### For RPC Providers
+
+- Scale horizontally with multiple nodes
+- Use load balancers
+- Implement rate limiting
+- Monitor query patterns
+- Cache frequent queries
+- Set appropriate CORS policies
+
+## Getting Help
+
+If you need assistance:
+
+- **Documentation**: [docs.tempo.xyz](https://docs.tempo.xyz)
+- **GitHub Issues**: [github.com/tempoxyz/tempo/issues](https://github.com/tempoxyz/tempo/issues)
+- **Discord**: [discord.gg/tempo](https://discord.gg/tempo)
+- **Forum**: [forum.tempo.xyz](https://forum.tempo.xyz)
+
+When asking for help, include:
+- Tempo version (`tempo --version`)
+- Operating system
+- Configuration (redact sensitive info)
+- Relevant log excerpts
+- Steps to reproduce the issue
